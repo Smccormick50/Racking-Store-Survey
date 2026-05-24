@@ -1,0 +1,1807 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="mobile-web-app-capable" content="yes">
+<title>McCoy's Store Inspection</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/FileSaver.js/2.0.5/FileSaver.min.js"></script>
+<style>
+:root{
+  /* McCoy's Building Supply brand colors */
+  --mccoys-green:#16653b;
+  --mccoys-green-dark:#0e4a2a;
+  --mccoys-green-light:#1d7a48;
+  --mccoys-yellow:#fbd71b;
+  --mccoys-yellow-dark:#e8c000;
+
+  --bg:#f4f1ea;
+  --panel:#ffffff;
+  --panel2:#f7f5ef;
+  --border:#d8d3c3;
+  --border-strong:#16653b;
+  --text:#1a1a1a;
+  --muted:#6b6b6b;
+  --accent:#16653b;
+  --accent2:#1d7a48;
+  --ok:#16653b;
+  --warn:#e8a800;
+  --bad:#c0392b;
+  --na:#8a8475;
+}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;font-size:16px;line-height:1.4;overscroll-behavior:none}
+body{padding-bottom:80px;min-height:100vh}
+
+header{position:sticky;top:0;z-index:50;background:var(--mccoys-green);border-bottom:4px solid var(--mccoys-yellow);padding:10px 16px;display:flex;align-items:center;justify-content:space-between;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+.logo{display:flex;align-items:center;gap:10px}
+.mccoys-badge{background:var(--mccoys-yellow);border:2px solid var(--mccoys-green-dark);color:var(--mccoys-green-dark);padding:4px 8px 2px;border-radius:3px;display:inline-flex;flex-direction:column;align-items:center;line-height:1;font-family:"Arial Black",Impact,sans-serif;letter-spacing:-.5px}
+.mccoys-badge .top{font-size:16px;font-weight:900;letter-spacing:0}
+.mccoys-badge .bot{font-size:7px;font-weight:900;letter-spacing:.5px;margin-top:1px}
+.logo-text{color:#fff;font-weight:700;font-size:13px;letter-spacing:.5px;line-height:1.1}
+.logo-text small{display:block;font-size:10px;color:var(--mccoys-yellow);font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-top:2px}
+.save-indicator{font-size:11px;color:var(--mccoys-yellow);font-weight:700;display:flex;align-items:center;gap:4px;background:rgba(0,0,0,.15);padding:5px 10px;border-radius:12px}
+.save-indicator.saving{color:#fff}
+
+nav{position:fixed;bottom:0;left:0;right:0;background:var(--mccoys-green);border-top:3px solid var(--mccoys-yellow);display:grid;grid-template-columns:repeat(6,1fr);z-index:100;padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -2px 8px rgba(0,0,0,.2)}
+nav button{background:none;border:none;color:rgba(255,255,255,.7);padding:10px 4px;font-size:10px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:3px;cursor:pointer;transition:color .15s}
+nav button .icon{font-size:20px;line-height:1}
+nav button.active{color:var(--mccoys-yellow)}
+nav button .badge{position:absolute;margin-left:18px;margin-top:-2px;background:var(--mccoys-yellow);color:var(--mccoys-green-dark);font-size:9px;font-weight:800;padding:1px 5px;border-radius:8px;min-width:14px;text-align:center}
+
+main{padding:16px;max-width:800px;margin:0 auto}
+.page{display:none}
+.page.active{display:block}
+
+h1{font-size:22px;font-weight:800;margin:0 0 4px;letter-spacing:-.5px;color:var(--mccoys-green-dark)}
+h2{font-size:17px;font-weight:700;margin:24px 0 12px;letter-spacing:-.3px;display:flex;align-items:center;gap:8px;color:var(--mccoys-green-dark)}
+h2 .count{font-size:12px;color:var(--muted);font-weight:600;background:var(--mccoys-yellow);padding:2px 8px;border-radius:10px;color:var(--mccoys-green-dark)}
+h3{font-size:15px;font-weight:700;margin:16px 0 8px;color:var(--mccoys-green)}
+.subtitle{color:var(--muted);font-size:13px;margin-bottom:20px}
+
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;font-weight:700;color:var(--mccoys-green-dark);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+.field label .req{color:var(--bad)}
+.field input,.field textarea,.field select{width:100%;background:#fff;border:1.5px solid var(--border);color:var(--text);padding:12px;border-radius:6px;font-size:16px;font-family:inherit}
+.field input:focus,.field textarea:focus,.field select:focus{outline:none;border-color:var(--mccoys-green)}
+.field textarea{min-height:80px;resize:vertical}
+
+.section{background:var(--panel);border:1.5px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.section-header{padding:14px 16px;background:var(--mccoys-green);color:#fff;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;cursor:pointer;user-select:none}
+.section-header:hover{background:var(--mccoys-green-light)}
+.section-header .stats{font-size:11px;color:rgba(255,255,255,.9);font-weight:600;display:flex;gap:8px}
+.section-header .stats span{display:inline-flex;align-items:center;gap:3px}
+.section-header .chevron{transition:transform .2s;color:var(--mccoys-yellow)}
+.section.open .chevron{transform:rotate(90deg)}
+.section-body{display:none;padding:0;background:#fff}
+.section.open .section-body{display:block}
+
+.item{padding:12px 16px;border-top:1px solid var(--border);display:flex;align-items:center;gap:10px;background:#fff}
+.item:first-child{border-top:none}
+.item-label{flex:1;font-size:14px;line-height:1.3;color:var(--text)}
+.item-actions{display:flex;gap:6px}
+.btn-state{background:#fff;border:1.5px solid var(--border);color:var(--muted);padding:8px 10px;border-radius:6px;font-size:11px;font-weight:800;cursor:pointer;text-transform:uppercase;letter-spacing:.5px;min-width:42px;transition:all .12s}
+.btn-state.ok.active{background:var(--mccoys-green);color:#fff;border-color:var(--mccoys-green)}
+.btn-state.issue.active{background:var(--mccoys-yellow);color:var(--mccoys-green-dark);border-color:var(--mccoys-yellow-dark)}
+.btn-state.na.active{background:var(--na);color:#fff;border-color:var(--na)}
+
+.item-detail{display:none;padding:0 16px 14px;background:#fffceb;border-top:1px solid var(--mccoys-yellow)}
+.item.has-issue + .item-detail{display:block}
+.item-detail textarea{width:100%;background:#fff;border:1.5px solid var(--border);color:var(--text);padding:10px;border-radius:6px;font-size:14px;font-family:inherit;min-height:60px;margin-top:10px}
+
+.photo-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px;align-items:center}
+.photo-thumb{position:relative;width:64px;height:64px;border-radius:6px;overflow:hidden;background:var(--panel2);border:1.5px solid var(--border)}
+.photo-thumb img{width:100%;height:100%;object-fit:cover;cursor:pointer}
+.photo-thumb .del{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.8);color:#fff;border:none;width:18px;height:18px;border-radius:50%;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700}
+.photo-add{width:64px;height:64px;background:#fff;border:1.5px dashed var(--mccoys-green);border-radius:6px;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--mccoys-green);font-size:10px;cursor:pointer;gap:2px;font-weight:700}
+.photo-add:hover{background:#f0f7f1;border-color:var(--mccoys-green-dark)}
+.photo-add input{display:none}
+.photo-add .cam{font-size:20px}
+
+.btn{background:var(--mccoys-green);color:#fff;border:none;padding:14px 20px;border-radius:6px;font-size:15px;font-weight:800;cursor:pointer;width:100%;letter-spacing:.3px;display:flex;align-items:center;justify-content:center;gap:8px;text-transform:uppercase;box-shadow:0 2px 4px rgba(0,0,0,.1)}
+.btn:hover{background:var(--mccoys-green-light)}
+.btn:disabled{opacity:.5;cursor:not-allowed}
+.btn-secondary{background:#fff;color:var(--mccoys-green-dark);border:2px solid var(--mccoys-green);box-shadow:none}
+.btn-secondary:hover{background:#f0f7f1}
+.btn-danger{background:var(--bad);color:#fff}
+.btn-row{display:flex;gap:10px;margin-top:16px}
+.btn-row .btn{flex:1}
+
+.add-structure{background:#fff;border:2px dashed var(--mccoys-green);color:var(--mccoys-green);padding:14px;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;width:100%;text-align:center;margin-bottom:12px;text-transform:uppercase;letter-spacing:.3px}
+.add-structure:hover{background:#f0f7f1;border-color:var(--mccoys-green-dark)}
+
+.structure-card{background:var(--panel);border:1.5px solid var(--border);border-radius:8px;margin-bottom:12px;overflow:hidden;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.structure-header{padding:12px 16px;background:var(--mccoys-yellow);display:flex;justify-content:space-between;align-items:center;gap:8px;border-bottom:2px solid var(--mccoys-yellow-dark)}
+.structure-name{font-weight:700;font-size:14px;flex:1;color:var(--mccoys-green-dark)}
+.structure-name input{background:transparent;border:none;color:var(--mccoys-green-dark);font-weight:800;font-size:14px;width:100%;padding:0}
+.structure-name input:focus{outline:none}
+.structure-del{background:none;border:none;color:var(--bad);cursor:pointer;font-size:18px;padding:4px 8px}
+
+.finding-card{background:var(--panel);border:1.5px solid var(--border);border-radius:8px;margin-bottom:10px;padding:14px}
+.finding-card .field{margin-bottom:10px}
+.finding-card .field:last-child{margin-bottom:0}
+.finding-meta{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.finding-meta .tag{background:var(--mccoys-green);color:#fff;font-size:11px;font-weight:800;padding:3px 10px;border-radius:10px;text-transform:uppercase;letter-spacing:.5px}
+.finding-meta .tag.racking{background:var(--mccoys-green)}
+.finding-meta .tag.other{background:var(--mccoys-yellow);color:var(--mccoys-green-dark)}
+
+.empty{text-align:center;color:var(--muted);padding:40px 20px;font-size:14px;background:#fff;border:1.5px dashed var(--border);border-radius:8px}
+.empty .icon{font-size:40px;display:block;margin-bottom:10px;opacity:.5}
+
+.export-card{background:var(--panel);border:1.5px solid var(--border);border-radius:8px;padding:18px;margin-bottom:12px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.export-card h3{margin-top:0;color:var(--mccoys-green-dark)}
+.export-card p{font-size:13px;color:var(--muted);margin:0 0 14px}
+.export-card .export-icon{font-size:32px;display:block;margin-bottom:8px}
+.export-card-highlight{border:2px solid var(--mccoys-yellow);background:linear-gradient(135deg,#fffceb 0%,#fff 100%);position:relative}
+.export-card code{background:#fffceb;color:var(--mccoys-green-dark);padding:1px 5px;border-radius:3px;font-size:12px;font-family:monospace;border:1px solid var(--mccoys-yellow)}
+
+.load-banner{background:linear-gradient(135deg,#fffceb 0%,#fff 100%);border:2px solid var(--mccoys-yellow);border-radius:8px;padding:14px 16px;margin-bottom:20px;display:flex;align-items:center;gap:12px}
+.load-banner-text{flex:1;font-size:13px;line-height:1.4}
+.load-banner-text strong{display:block;color:var(--mccoys-green-dark);font-size:14px;margin-bottom:2px}
+.load-banner-text span{color:var(--muted)}
+.load-btn{padding:10px 14px;font-size:13px;width:auto;white-space:nowrap;cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+
+.storefront-area{position:relative}
+.storefront-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;background:#fff;border:2px dashed var(--mccoys-green);border-radius:8px;padding:30px 16px;cursor:pointer;color:var(--mccoys-green);text-align:center}
+.storefront-empty:hover{background:#f0f7f1;border-color:var(--mccoys-green-dark)}
+.storefront-preview{position:relative;border-radius:8px;overflow:hidden;background:var(--panel);border:2px solid var(--mccoys-green)}
+.storefront-preview img{width:100%;display:block;max-height:240px;object-fit:cover;cursor:pointer}
+.storefront-actions{position:absolute;top:8px;right:8px;display:flex;gap:6px}
+.storefront-actions button,.storefront-actions label{background:rgba(0,0,0,.75);color:#fff;border:none;padding:8px 12px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:4px}
+.storefront-actions button:hover,.storefront-actions label:hover{background:rgba(0,0,0,.9)}
+.storefront-actions .del{background:rgba(192,57,43,.9)}
+
+.toast{position:fixed;bottom:90px;left:50%;transform:translateX(-50%);background:var(--mccoys-green);color:#fff;padding:12px 20px;border-radius:6px;font-weight:700;font-size:14px;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,.3);animation:slideUp .3s ease-out;border-bottom:3px solid var(--mccoys-yellow)}
+.toast.error{background:var(--bad);border-bottom-color:#922;color:#fff}
+@keyframes slideUp{from{transform:translate(-50%,20px);opacity:0}to{transform:translate(-50%,0);opacity:1}}
+
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.9);z-index:300;display:none;align-items:center;justify-content:center;padding:20px}
+.modal.open{display:flex}
+.modal img{max-width:100%;max-height:90vh;border-radius:8px}
+.modal-close{position:absolute;top:20px;right:20px;background:rgba(0,0,0,.6);color:#fff;border:none;width:40px;height:40px;border-radius:50%;font-size:20px;cursor:pointer}
+
+.history-item{background:var(--panel);border:1.5px solid var(--border);border-radius:8px;padding:14px;margin-bottom:10px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.history-item:hover{border-color:var(--mccoys-green)}
+.history-item .h-store{font-weight:700;font-size:15px;color:var(--mccoys-green-dark)}
+.history-item .h-meta{font-size:12px;color:var(--muted);margin-top:3px}
+.history-item .h-stats{font-size:11px;color:var(--mccoys-green);margin-top:4px;font-weight:600}
+.history-del{background:none;border:none;color:var(--bad);font-size:18px;cursor:pointer;padding:4px 8px}
+
+.progress{height:6px;background:var(--border);border-radius:3px;overflow:hidden;margin-bottom:16px}
+.progress-bar{height:100%;background:linear-gradient(90deg,var(--mccoys-green) 0%,var(--mccoys-green-light) 100%);transition:width .3s}
+
+.ref-strip{background:#fffceb;border-top:2px solid var(--mccoys-yellow);padding:10px 16px 14px}
+.ref-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.ref-label{font-size:11px;font-weight:800;color:var(--mccoys-green-dark);text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px}
+.ref-count{background:var(--mccoys-green);color:var(--mccoys-yellow);font-size:10px;font-weight:800;padding:1px 6px;border-radius:8px;min-width:18px;text-align:center}
+.ref-thumb{display:flex;flex-direction:column;gap:4px;width:64px}
+.ref-caption{background:#fff;border:1px solid var(--border);color:var(--text);padding:4px 6px;border-radius:4px;font-size:10px;font-family:inherit;width:64px}
+.ref-caption:focus{outline:none;border-color:var(--mccoys-green)}
+
+/* ===== Real McCoy's branding header update ===== */
+header{
+  position:sticky;
+  top:0;
+  z-index:50;
+  background:#0f5c34;
+  border-bottom:4px solid #fbd71b;
+  padding:8px 14px;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  box-shadow:0 2px 8px rgba(0,0,0,.15);
+}
+.logo{
+  display:flex;
+  align-items:center;
+  gap:12px;
+}
+.mccoys-logo{
+  height:44px;
+  width:auto;
+  display:block;
+  border:0;
+}
+.logo-text{
+  color:#fff;
+  font-weight:800;
+  font-size:14px;
+  letter-spacing:.2px;
+  line-height:1.1;
+}
+.logo-text small{
+  display:block;
+  color:#fbd71b;
+  font-size:10px;
+  font-weight:700;
+  letter-spacing:1px;
+  text-transform:uppercase;
+  margin-top:2px;
+}
+.save-indicator{
+  font-size:11px;
+  color:#fbd71b;
+  font-weight:800;
+  display:flex;
+  align-items:center;
+  gap:4px;
+  background:rgba(0,0,0,.18);
+  padding:5px 10px;
+  border-radius:12px;
+  text-transform:uppercase;
+}
+@media(max-width:420px){
+  .mccoys-logo{height:36px}
+  .logo-text{font-size:12px}
+  .logo-text small{font-size:9px}
+  header{padding:7px 10px}
+}
+
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">
+    <img src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGYAAAAkCAYAAAB7T08FAAAIr0lEQVR4nO1bfVAU5x1+dvfu9r44Ds+A1lN7xis2xFBTnSqWOohtaIqVNpkpNTNphDi1pZo6JqZjHalo7R/ppZYZHWKSNmNLQyadJE5TyzQWkmB1HNoYhmBFTEjkQ7Cc3B33tfex2z+WfW+XW5DjmEAn98zcH/fuu+/+3t/z/j53lsrduVHAOKKeIOLBCCCQoQw+LVAUGKMOWqsRAKCRxqOeIOIBbs7k+sxDEIj+tVZjgph4MAIAOPdTP9Ysjc+NcJ9hXO5jsOW4GfFgBFqrETS5Mu6+MqTMDYjex3mgp5ibwRwiQ8w8RYaYeYoMMfMUmjtPUSLAUXjk90a09SRuLXbG0LgjCBMrBq6aJgOa2nXkusPG468/8SPPMrP6qLlLi0d+Z1SMWQ0CXtsVQKE9OVlRk3GinBPXrFwXwYnKEPnf0c/guw0meEIUuXfHhgiqThuntWe1OalgViyms5/B9f+KSw37KFz6KGW+VRHgKFQ0mJJIAQBPiMLm35hR02RQjDd3abHsgCWJFABo69Fg2QELmru0KCuIorY8TK41tevQ3KUl/0+d1xFSHDYez20PglXZ1rCPwtpjWUmkSM+770gWOvqZae9ZwqwQ4wlRuOkVlxry0RgNUrOxLPa/ricKthoEtOz1w+3yorEqSObIFTrso3DwjJ5cq1wXgdvlhdvlReW6CBmvedmAjn4G1UURFDtjZLyhTYcAR6G5S6tQ9NFtYeRZBCzO5mE1iKd/iZWHiRXwyr916HXTiuddqfXBYeOJbk6dTybtTkiLGKtBwOfHBfhLp6jAm14anhCluDYRHf0M7j5ogW1fNvndfdCiOFkTLe+JUo64rbKCKFF0Y1UQzlxxXK4kh43HoQcTFnHowbBCWe/0aGBiBRwuDxNlt/VocLyFRUNbQpHFzhiKV4rkrbyLx+pxGfLzxLW6hxMqHPDQCHAU8iwCHt0QSRpPBWn5nByjAPsCHh+7afJwiaDlk5BS38ri8Jv6pHHJNTVWBVFWEMXlPg1RstUgYJPsZAPAicqQIiYEOAot3YntfGVFTBHTzCxgX8CTNVu6NaguiqDQHscTpRyR6dlzLLnHahCJk2KEiRXwxq6AQg6JICDhKqV7W/b6VWPgdJC2K9t2XxSAGGfe72cw4BGXLF0Vg8WgDHrDPgqnLyZOY2NVEG6XFy17/eTUSu5ktmFiBSyxqh+W7305QqxJDrmVToaJ7lCCdNAmeoLpIm1iFmcLsBoEeEIU3r6mQee4EPl5yRuSW4HcRRTa4/jwqA9ulxdv7ArMKItJB3kWAUe3hRVjxc4Yqosik9yRgGRF8rgnhydEofq0EcO+1A5b2sQ4c+PE7z57joUnRMFh41V7btduzV7ZVN/KoqLBNG3rCnAUsWY1rFkaU1jN5vxYSgekrCBKEg25BwCA0SCFIV9qe09bU2YVF2FfwMOssqkv5Kq7EjXIFSUFawlSPJF8ek2TASZWwOb8hEu59JFGcUr9HNB/O7HdVBWvBilVlhIYKTsstMfx2q6AgpxUMStHWB4AAXHTZjZ5njzdbOvRoO26qGx5lrb2WBaGfcmZzemLOqLoFy/oFHXK1tUiIfJY0eumUXc2kWTUndVPmUzMBFJCIUEeH9/p0ZA6KMcoYJFl+ocSSDMrk7DJGSNxBpjcMiZmQGqF46MbIiSbqi6KEMvoddO457AlaX5teRhlBWICIsUKad2mdp1q4Xfi+6EZZ0tySOm21CGQZ2VySHVQKpgVi1lk4ZFjFB8sxpfJT+OeEi7JBwOJ9HJPSeIt6lSBVW0+IPr6G8d8qplSsTOGG8d8hMjZQKE9jgv7x1SzOoeNx5XamT2Pkt75hwdGAQBulzdNUTOYKWz7sgEA+iU5me7yfEWGmHmKDDHzFCkTU9/Kkrw996lsPP26ATFefB8hFXzNXVrSipBS4fpWluT99a2JXFpeC+Q+lY1vnzRh0EuTcamtX9NkQH6tBe/dYBTrj/gpPHzKRGSqaDDhdkBZdPrCFCpfMGHFQQuWH7Dgmb+zEITJZZbvcfkBC14abyPVNBnIeH6tBW9f05D9STWML0zhoedMeKDejFtjFB7/gxGbXGaM+D+Fyt9h49F5aAwVhVFcGaQRiqTf29r3dQ6v7gyga5DBn9/Tqs4Z8VP45d/08Mm6J39q1+HqEI2L+8fw7pN+VBRGwcWU8vSO0Hi/n8HuEg4N20O4f1kckTtkyw4bj0tPj6HQHsfZD7Rkj8XOGC7uH4NJJ+DNzmQ5LXoBP/9mGJ/cprHzj0b846oGh7eGsdCcWro8ozqm101jdV0WtAywt5SDXpt+b8vMClizLI78RbyilS6HPYdHzy0az59PWFz3MI2VuTy0GuDJV/QY8NAQBGCHrM91z+I49pRw+G0LixE/hW98MYb1jqmZ6RulUX7SDG+Qwi+2hmHQiXts/5jB1pNmhKPAllXqZcGapXHUbOJw5KweP1gfwVdXpl7MzthiPjg0hl9VhPDiP3W4OsTAohdPZt8oja5BGqwWMExCmJ+jMOyjMOKnEOcTY5dvMOgeopM6CeS5C3n87AEOV24mxM7P43H9Fo1wlEJteRhcDBib0D/7zxCDd3s0OPOjAH79UAgdAwwGPNSUMn/OyuPVnQFcP+LDD4sTtVKhnUfzbj+u1SnrE29I3JN73I1+zRlDFiugdFUMmhloecYWc29dFhga+M6XolixkMfjGzm09TDY+IwZGhrYXcJhxV08ugaTW96ut1i43mLhsPF46bEAGTtOs1jviOHh+ycvyMoKovjXJwzOdIhuZPu6CC58qMEmlxlxHli7PI5v3au8Py+LR4ADke2xoggcU8gMAAwF5GbxSf00nUZAbpaQ9Jr5xy8bABjIe/50kSkw5xEyBeb/ARLEUKJvvNyX+tu2DNIH0fs4D8RTMkYd4gEOW46b50SwDEQwRrFmIsRIH8xkPlyaI0z24RIgkiNdyGBukQn+8xT/A13R8BdzSt4wAAAAAElFTkSuQmCC" alt="McCoy's Building Supply" class="mccoys-logo">
+    <div class="logo-text">Store Inspection<small>Field Survey Tool</small></div>
+  </div>
+  <div class="save-indicator" id="saveIndicator">✓ Saved</div>
+</header>
+
+<main>
+
+<!-- STORE INFO PAGE -->
+<div class="page active" id="page-store">
+  <div class="load-banner">
+    <div class="load-banner-text">
+      <strong>Continuing from another device?</strong>
+      <span>Load a saved survey file (.json) from OneDrive, email, or downloads.</span>
+    </div>
+    <label class="btn btn-secondary load-btn">
+      📂 Load Survey
+      <input type="file" accept=".json,application/json" onchange="loadSurveyFile(this.files[0])" style="display:none">
+    </label>
+  </div>
+
+  <h1>Store Info</h1>
+  <p class="subtitle">Start with the basics. Auto-saves as you go.</p>
+
+  <div class="field">
+    <label>Store Number <span class="req">*</span></label>
+    <input type="text" id="storeNumber" placeholder="e.g. 120" inputmode="numeric">
+  </div>
+  <div class="field">
+    <label>Store Name / City <span class="req">*</span></label>
+    <input type="text" id="storeName" placeholder="e.g. Lockhart">
+  </div>
+  <div class="field">
+    <label>Survey Date</label>
+    <input type="date" id="surveyDate">
+  </div>
+  <div class="field">
+    <label>Surveyor Name <span class="req">*</span></label>
+    <input type="text" id="surveyorName" placeholder="e.g. Steven McCormick">
+  </div>
+
+  <div class="field">
+    <label>Storefront Photo</label>
+    <div class="storefront-area" id="storefrontArea">
+      <label class="storefront-empty" id="storefrontEmpty">
+        <span class="cam" style="font-size:36px">📷</span>
+        <span style="font-size:14px;font-weight:600;margin-top:6px">Take Storefront Photo</span>
+        <span style="font-size:11px;color:var(--muted);margin-top:2px">Appears at top of every PDF</span>
+        <input type="file" accept="image/*" capture="environment" onchange="setStorefront(this.files[0])" style="display:none">
+      </label>
+    </div>
+  </div>
+
+  <button class="btn" onclick="goTo('walk')">Start Inspection Walk →</button>
+</div>
+
+<!-- GUIDED WALK PAGE -->
+<div class="page" id="page-walk">
+  <h1>Inspection Walk</h1>
+  <p class="subtitle">Tap OK, Issue, or N/A for each item. Add photos and notes for issues.</p>
+  <div class="progress"><div class="progress-bar" id="progressBar" style="width:0%"></div></div>
+
+  <div id="walkSections"></div>
+
+  <h2>Outside Structures <span class="count" id="structCount">0</span></h2>
+  <p class="subtitle" style="margin-top:-8px">Add each pole barn, shed, or drive-through this store has.</p>
+  <button class="add-structure" onclick="addStructure()">+ Add Outside Structure</button>
+  <div id="structuresList"></div>
+
+  <button class="btn" onclick="goTo('review')" style="margin-top:24px">Review Findings →</button>
+</div>
+
+<!-- REVIEW / OTHER FINDINGS PAGE -->
+<div class="page" id="page-review">
+  <h1>Review & Add Free-Form</h1>
+  <p class="subtitle">Review your findings, or add anything that didn't fit the checklist.</p>
+
+  <h2>Racking Findings <span class="count" id="rackCount">0</span></h2>
+  <div id="rackingList"></div>
+  <button class="btn btn-secondary" onclick="addFreeForm('racking')">+ Add Racking Finding</button>
+
+  <h2 style="margin-top:28px">Facility Findings <span class="count" id="facCount">0</span></h2>
+  <div id="facilityList"></div>
+  <button class="btn btn-secondary" onclick="addFreeForm('facility')">+ Add Facility Finding</button>
+
+  <button class="btn" onclick="goTo('export')" style="margin-top:28px">Go to Export →</button>
+</div>
+
+<!-- EXPORT PAGE -->
+<div class="page" id="page-export">
+  <h1>Export Reports</h1>
+  <p class="subtitle">Generate PDFs and download photos for OneDrive.</p>
+
+  <div class="export-card export-card-highlight">
+    <span class="export-icon">💾</span>
+    <h3>Save Survey File</h3>
+    <p>Save the entire survey (data + photos) as one <code>.json</code> file. Put it on OneDrive from your phone, open it on your computer to finish exporting. Best for the walk-today-download-tomorrow workflow.</p>
+    <button class="btn" onclick="saveSurveyFile()">Download Survey Backup</button>
+  </div>
+
+  <h3 style="margin:24px 0 8px;color:var(--muted);text-transform:uppercase;font-size:11px;letter-spacing:1px">Final Deliverables</h3>
+
+  <div class="export-card">
+    <span class="export-icon">🔧</span>
+    <h3>Racking PDF</h3>
+    <p>All racking findings with photos — one FEXA work order.</p>
+    <button class="btn" onclick="generatePDF('racking')">Download Racking PDF</button>
+  </div>
+
+  <div class="export-card">
+    <span class="export-icon">🏪</span>
+    <h3>Facility PDF</h3>
+    <p>Everything else — restrooms, lighting, structures, fencing, etc.</p>
+    <button class="btn" onclick="generatePDF('facility')">Download Facility PDF</button>
+  </div>
+
+  <div class="export-card">
+    <span class="export-icon">📁</span>
+    <h3>All Photos (ZIP)</h3>
+    <p>Organized into <strong>Issues/</strong> (per-finding) and <strong>Reference/</strong> (the for-later shots) folders. Unzip and drop into OneDrive.</p>
+    <button class="btn" onclick="downloadPhotoZip()">Download Photo ZIP</button>
+  </div>
+
+  <div class="btn-row">
+    <button class="btn btn-secondary" onclick="startNew()">Start New Survey</button>
+  </div>
+</div>
+
+<!-- HISTORY PAGE -->
+<div class="page" id="page-history">
+  <h1>Past Surveys</h1>
+  <p class="subtitle">Last 10 surveys. Tap to reopen.</p>
+  <div id="historyList"></div>
+</div>
+
+<!-- GLOBAL REFERENCE PHOTOS PAGE -->
+<div class="page" id="page-refs">
+  <h1>Reference Photos <span class="count" id="globalRefCount" style="font-size:14px;background:var(--panel);padding:3px 10px;border-radius:12px;color:var(--muted);font-weight:500;vertical-align:middle">0</span></h1>
+  <p class="subtitle">Anything you want to look back at later — counters, lights, signs, layouts, oddities. Not tied to any issue. You can also add reference photos per-section on the Walk page.</p>
+  <div id="globalRefList"></div>
+</div>
+
+</main>
+
+<nav>
+  <button data-page="store" onclick="goTo('store')"><span class="icon">🏪</span>Store</button>
+  <button data-page="walk" onclick="goTo('walk')"><span class="icon">📋</span>Walk</button>
+  <button data-page="refs" onclick="goTo('refs')"><span class="icon">📎</span>Refs</button>
+  <button data-page="review" onclick="goTo('review')"><span class="icon">⚠️</span>Review</button>
+  <button data-page="export" onclick="goTo('export')"><span class="icon">📤</span>Export</button>
+  <button data-page="history" onclick="goTo('history')"><span class="icon">📚</span>History</button>
+</nav>
+
+<div class="modal" id="photoModal" onclick="closePhotoModal()">
+  <button class="modal-close" onclick="closePhotoModal()">×</button>
+  <img id="modalImg" src="">
+</div>
+
+<script>
+// ============= CHECKLIST DEFINITION =============
+const CHECKLIST = {
+  "Exterior Approach": [
+    { id:"ext_road_signs", label:"Road signs — faded or damaged" },
+    { id:"ext_facade_signs", label:"Building façade signs — faded or damaged" },
+    { id:"ext_front_damage", label:"Front of building — damage" },
+    { id:"ext_lights_day", label:"Exterior lights on during the day" }
+  ],
+  "Restrooms — Men's": [
+    { id:"rm_m_partition", label:"Partition secure to wall" },
+    { id:"rm_m_tile", label:"Tile (broken/damaged)" },
+    { id:"rm_m_handrails", label:"ADA handrails / grab bars" },
+    { id:"rm_m_tp_disp", label:"Toilet paper dispenser" },
+    { id:"rm_m_soap_disp", label:"Soap dispenser" },
+    { id:"rm_m_towel_disp", label:"Paper towel dispenser" },
+    { id:"rm_m_locks", label:"Locks" },
+    { id:"rm_m_mirror", label:"Mirror" },
+    { id:"rm_m_door_handle", label:"Door handle" },
+    { id:"rm_m_paint", label:"Paint" },
+    { id:"rm_m_lighting", label:"Lighting" },
+    { id:"rm_m_vent", label:"Vent fan" },
+    { id:"rm_m_ada_sign", label:"ADA sign — correct & properly mounted" }
+  ],
+  "Restrooms — Women's": [
+    { id:"rm_w_partition", label:"Partition secure to wall" },
+    { id:"rm_w_tile", label:"Tile (broken/damaged)" },
+    { id:"rm_w_handrails", label:"ADA handrails / grab bars" },
+    { id:"rm_w_tp_disp", label:"Toilet paper dispenser" },
+    { id:"rm_w_soap_disp", label:"Soap dispenser" },
+    { id:"rm_w_towel_disp", label:"Paper towel dispenser" },
+    { id:"rm_w_locks", label:"Locks" },
+    { id:"rm_w_mirror", label:"Mirror" },
+    { id:"rm_w_sanitary", label:"Sanitary trash cans" },
+    { id:"rm_w_door_handle", label:"Door handle" },
+    { id:"rm_w_paint", label:"Paint" },
+    { id:"rm_w_lighting", label:"Lighting" },
+    { id:"rm_w_vent", label:"Vent fan" },
+    { id:"rm_w_ada_sign", label:"ADA sign — correct & properly mounted" }
+  ],
+  "Lunch Room": [
+    { id:"lr_cabinets", label:"Cabinets" },
+    { id:"lr_counters", label:"Countertops" },
+    { id:"lr_paint", label:"Paint" },
+    { id:"lr_sink", label:"Sink (if present)" },
+    { id:"lr_lighting", label:"Lighting" }
+  ],
+  "Offices": [
+    { id:"of_counters", label:"Countertops" },
+    { id:"of_cabinets", label:"Cabinets" },
+    { id:"of_lighting", label:"Lighting" },
+    { id:"of_paint", label:"Paint" }
+  ],
+  "Sales Floor": [
+    { id:"sf_lights", label:"Lights out (count in notes)" },
+    { id:"sf_walls", label:"Side walls — scratches / damage" },
+    { id:"sf_paint", label:"Paint" },
+    { id:"sf_conduit_signs", label:"Signs hanging on electrical conduit" },
+    { id:"sf_rodents", label:"Rodent problems" },
+    { id:"sf_front_doors", label:"Automatic front doors" },
+    { id:"sf_roof_leak", label:"Roof leaking" },
+    { id:"sf_hvac_leak", label:"HVAC leaking" },
+    { id:"sf_concrete", label:"Concrete cracks" },
+    { id:"sf_electrical", label:"Exposed electrical" },
+    { id:"sf_rollup", label:"Back roll-up door — damage" },
+    { id:"sf_entouch", label:"Entouch sensor on roll-up — working" },
+    { id:"sf_alarm", label:"Alarm panel — normal (no trouble)" }
+  ],
+  "Sales Building Roof": [
+    { id:"rf_satellite", label:"Old satellite — removable?" },
+    { id:"rf_jacks", label:"Roof jacks" },
+    { id:"rf_damage", label:"Obvious roof damage" },
+    { id:"rf_ladder", label:"Roof access ladder secured" },
+    { id:"rf_skylights", label:"Skylights" },
+    { id:"rf_rtu_panels", label:"HVAC RTU access panels closed" },
+    { id:"rf_rtu_sound", label:"HVAC RTUs — no unusual sounds" }
+  ],
+  "Warehouse": [
+    { id:"wh_lighting", label:"Lighting" },
+    { id:"wh_pallet_rack", label:"Pallet racking (uprights / step beams)" },
+    { id:"wh_mez_rack", label:"Mez racking (uprights / beams / flooring)" },
+    { id:"wh_cantilever", label:"Cantilever racking (if present)" },
+    { id:"wh_walls_pushed", label:"Product pushing back walls out" },
+    { id:"wh_barn_doors", label:"Barn doors working" },
+    { id:"wh_rollup_doors", label:"Roll-up doors working" },
+    { id:"wh_electrical", label:"Electrical issues" },
+    { id:"wh_jbox", label:"Exposed junction boxes" },
+    { id:"wh_conduit", label:"Conduit damage" }
+  ],
+  "Yard": [
+    { id:"yd_uframe", label:"U-frame racking (count & damage)" },
+    { id:"yd_xframe", label:"X-frame racking (count & damage)" },
+    { id:"yd_fence", label:"Fence line — damage" },
+    { id:"yd_gates", label:"Gates working properly" },
+    { id:"yd_concrete", label:"Concrete damage" },
+    { id:"yd_asphalt", label:"Asphalt damage" }
+  ]
+};
+
+const STRUCTURE_TYPES = {
+  "Pole Barn": [
+    { id:"pb_endwalls", label:"End walls (R-panel or wood) — damage" },
+    { id:"pb_trusses", label:"Trusses — damage" },
+    { id:"pb_posts", label:"Posts — cracked / broken / rotted at base" },
+    { id:"pb_fascia", label:"Fascia board" },
+    { id:"pb_paint", label:"Paint" },
+    { id:"pb_roofing", label:"Roofing" },
+    { id:"pb_lighting", label:"Lighting (if electrified)" },
+    { id:"pb_pigeonhole", label:"Pigeonhole rack inside (note bay count / sided)" }
+  ],
+  "Drive-Through Building": [
+    { id:"dt_cant_arms", label:"Cantilever arms — damage" },
+    { id:"dt_cant_bases", label:"Cantilever bases — damage" },
+    { id:"dt_cant_cols", label:"Cantilever columns — damage" },
+    { id:"dt_pigeonhole", label:"Pigeonhole rack (if present)" },
+    { id:"dt_pallet", label:"Pallet racking (uprights / step beams)" },
+    { id:"dt_rpanel", label:"R-panel siding" },
+    { id:"dt_metal_trim", label:"Metal trim" },
+    { id:"dt_gutters", label:"Gutters" },
+    { id:"dt_downspouts", label:"Downspouts" },
+    { id:"dt_lighting", label:"Lighting" },
+    { id:"dt_columns", label:"Metal columns" },
+    { id:"dt_alarm", label:"Alarm panel — normal" }
+  ],
+  "T Shed": [
+    { id:"ts_endwalls", label:"Metal end walls — damage" },
+    { id:"ts_roofing", label:"Roofing" },
+    { id:"ts_columns", label:"Columns" },
+    { id:"ts_metal_trim", label:"Metal trim" },
+    { id:"ts_gutters", label:"Gutters" },
+    { id:"ts_downspouts", label:"Downspouts" },
+    { id:"ts_lighting", label:"Lighting" },
+    { id:"ts_pigeonhole", label:"Pigeonhole rack (if present)" }
+  ],
+  "3-Sided Shed": [
+    { id:"ss_siding", label:"Metal siding — damage" },
+    { id:"ss_metal_trim", label:"Metal trim" },
+    { id:"ss_gutters", label:"Gutters" },
+    { id:"ss_downspouts", label:"Downspouts" },
+    { id:"ss_pallet", label:"Pallet racking" },
+    { id:"ss_cantilever", label:"Cantilever racking" },
+    { id:"ss_pigeonhole_single", label:"Single-sided pigeonhole racking" },
+    { id:"ss_columns", label:"Columns" },
+    { id:"ss_lighting", label:"Lighting" }
+  ],
+  "Umbrella Shed": [
+    { id:"us_siding", label:"Metal siding — damage" },
+    { id:"us_metal_trim", label:"Metal trim" },
+    { id:"us_gutters", label:"Gutters" },
+    { id:"us_downspouts", label:"Downspouts" },
+    { id:"us_columns", label:"Columns" },
+    { id:"us_pallet", label:"Pallet racking" },
+    { id:"us_cantilever", label:"Cantilever racking" },
+    { id:"us_pigeonhole", label:"Pigeonhole racking" },
+    { id:"us_lighting", label:"Lighting" }
+  ],
+  "Cut Shed": [
+    { id:"cs_location", label:"Attached to — note location" },
+    { id:"cs_siding", label:"Metal siding — damage" },
+    { id:"cs_metal_trim", label:"Metal trim" },
+    { id:"cs_gutters", label:"Gutters" },
+    { id:"cs_downspouts", label:"Downspouts" },
+    { id:"cs_bench", label:"Cut bench" },
+    { id:"cs_lighting", label:"Lighting" }
+  ]
+};
+
+// items considered racking — generate racking PDF from these + free-form racking
+const RACKING_IDS = new Set([
+  "wh_pallet_rack","wh_mez_rack","wh_cantilever","wh_walls_pushed",
+  "yd_uframe","yd_xframe",
+  "pb_pigeonhole",
+  "dt_cant_arms","dt_cant_bases","dt_cant_cols","dt_pigeonhole","dt_pallet",
+  "ts_pigeonhole",
+  "ss_pallet","ss_cantilever","ss_pigeonhole_single",
+  "us_pallet","us_cantilever","us_pigeonhole"
+]);
+
+// ============= STATE =============
+let state = {
+  storeNumber:"",storeName:"",surveyDate:new Date().toISOString().slice(0,10),surveyorName:"",
+  storefront:null, // {name, data} - banner photo for PDFs
+  checklist:{}, // {itemId: {status, notes, photos:[{name,data}]}}
+  structures:[], // [{id, type, name, checklist:{}, refPhotos:[{name,data,caption}]}]
+  freeForm:[], // [{id, kind:'racking'|'facility', location, description, photos}]
+  refPhotos:{}, // {sectionKey: [{name,data,caption}]} — sectionKey is section name or '_global'
+  createdAt:Date.now()
+};
+
+const SAVE_KEY = "mccoys_inspection_current";
+
+function save(){
+  try{
+    localStorage.setItem(SAVE_KEY, JSON.stringify(state));
+    const ind = document.getElementById('saveIndicator');
+    ind.classList.add('saving'); ind.textContent = '⟳ Saving';
+    setTimeout(()=>{ind.classList.remove('saving'); ind.textContent='✓ Saved';},300);
+  }catch(e){console.error(e); toast('Save failed — storage full?','error');}
+}
+
+function load(){
+  try{
+    const raw = localStorage.getItem(SAVE_KEY);
+    if(raw){
+      state = JSON.parse(raw);
+      // migration: ensure refPhotos exists
+      if(!state.refPhotos) state.refPhotos = {};
+      if(state.storefront === undefined) state.storefront = null;
+      state.structures = state.structures || [];
+      state.structures.forEach(s=>{ if(!s.refPhotos) s.refPhotos = []; });
+      ['storeNumber','storeName','surveyDate','surveyorName'].forEach(k=>{
+        const el=document.getElementById(k); if(el && state[k]) el.value=state[k];
+      });
+      toast('📂 Previous survey restored');
+    } else {
+      document.getElementById('surveyDate').value = state.surveyDate;
+    }
+  }catch(e){console.error(e);}
+}
+
+// ============= NAVIGATION =============
+function goTo(page){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById('page-'+page).classList.add('active');
+  document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+  document.querySelectorAll(`nav button[data-page="${page}"]`).forEach(b=>b.classList.add('active'));
+  window.scrollTo(0,0);
+  if(page==='walk') renderWalk();
+  if(page==='review') renderReview();
+  if(page==='history') renderHistory();
+  if(page==='refs') renderGlobalRefPhotos();
+  if(page==='store') renderStorefront();
+}
+
+// ============= WALK PAGE =============
+function renderWalk(){
+  const container = document.getElementById('walkSections');
+  container.innerHTML = '';
+  Object.entries(CHECKLIST).forEach(([section, items])=>{
+    const sec = document.createElement('div');
+    sec.className = 'section';
+    const stats = sectionStats(items, state.checklist);
+    const refPhotos = state.refPhotos[section] || [];
+    sec.innerHTML = `
+      <div class="section-header" onclick="this.parentElement.classList.toggle('open')">
+        <div>${section}</div>
+        <div class="stats">
+          <span style="color:#fff;font-weight:700">✓ ${stats.ok}</span>
+          <span style="color:var(--mccoys-yellow);font-weight:700">⚠ ${stats.issue}</span>
+          <span style="color:rgba(255,255,255,.6)">— ${stats.na}</span>
+          ${refPhotos.length ? `<span style="color:var(--mccoys-yellow)">📎${refPhotos.length}</span>` : ''}
+          <span class="chevron">▶</span>
+        </div>
+      </div>
+      <div class="section-body">
+        ${items.map(it => renderItem(it, state.checklist)).join('')}
+        ${renderRefPhotoStrip(section, refPhotos)}
+      </div>
+    `;
+    container.appendChild(sec);
+  });
+  renderStructures();
+  updateProgress();
+}
+
+function renderItem(item, store){
+  const data = store[item.id] || {};
+  const status = data.status || '';
+  return `
+    <div class="item ${status==='issue'?'has-issue':''}" data-id="${item.id}">
+      <div class="item-label">${item.label}</div>
+      <div class="item-actions">
+        <button class="btn-state ok ${status==='ok'?'active':''}" onclick="setStatus('${item.id}','ok')">OK</button>
+        <button class="btn-state issue ${status==='issue'?'active':''}" onclick="setStatus('${item.id}','issue')">Issue</button>
+        <button class="btn-state na ${status==='na'?'active':''}" onclick="setStatus('${item.id}','na')">N/A</button>
+      </div>
+    </div>
+    ${status==='issue' ? renderItemDetail(item) : ''}
+  `;
+}
+
+function renderItemDetail(item){
+  const data = state.checklist[item.id] || {};
+  const notes = data.notes || '';
+  const photos = data.photos || [];
+  return `
+    <div class="item-detail" style="display:block">
+      <textarea placeholder="Describe the issue, quantities, part numbers, dimensions..." onchange="setNotes('${item.id}',this.value)">${escapeHtml(notes)}</textarea>
+      <div class="photo-row">
+        ${photos.map((p,i)=>`
+          <div class="photo-thumb">
+            <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+            <button class="del" onclick="deletePhoto('${item.id}',${i})">×</button>
+          </div>
+        `).join('')}
+        <label class="photo-add">
+          <span class="cam">📷</span><span>Camera</span>
+          <input type="file" accept="image/*" capture="environment" multiple onchange="addPhoto('${item.id}',this.files)">
+        </label>
+
+        <label class="photo-add">
+          <span class="cam">🖼️</span><span>Upload</span>
+          <input type="file" accept="image/*" multiple onchange="addPhoto('${item.id}',this.files)">
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function sectionStats(items, store){
+  let ok=0, issue=0, na=0;
+  items.forEach(it=>{
+    const s = (store[it.id]||{}).status;
+    if(s==='ok') ok++; else if(s==='issue') issue++; else if(s==='na') na++;
+  });
+  return {ok,issue,na};
+}
+
+function setStatus(id, status){
+  if(!state.checklist[id]) state.checklist[id] = {};
+  // toggle off if same
+  if(state.checklist[id].status === status) state.checklist[id].status = '';
+  else state.checklist[id].status = status;
+  if(state.checklist[id].status !== 'issue'){
+    // keep notes/photos but they won't appear in PDF unless status===issue
+  }
+  save();
+  renderWalk();
+}
+
+// for structures, status is stored inside the structure's checklist
+function setStructStatus(structId, itemId, status){
+  const s = state.structures.find(x=>x.id===structId); if(!s) return;
+  if(!s.checklist[itemId]) s.checklist[itemId] = {};
+  if(s.checklist[itemId].status === status) s.checklist[itemId].status = '';
+  else s.checklist[itemId].status = status;
+  save();
+  renderStructures();
+}
+
+function setNotes(id, val){
+  if(!state.checklist[id]) state.checklist[id] = {};
+  state.checklist[id].notes = val;
+  save();
+}
+
+function setStructNotes(structId, itemId, val){
+  const s = state.structures.find(x=>x.id===structId); if(!s) return;
+  if(!s.checklist[itemId]) s.checklist[itemId] = {};
+  s.checklist[itemId].notes = val;
+  save();
+}
+
+async function addPhoto(id, files){
+  if(!state.checklist[id]) state.checklist[id] = {};
+  if(!state.checklist[id].photos) state.checklist[id].photos = [];
+  for(const f of files){
+    const data = await resizeImage(f);
+    state.checklist[id].photos.push({name:f.name, data});
+  }
+  save();
+  renderWalk();
+}
+
+async function addStructPhoto(structId, itemId, files){
+  const s = state.structures.find(x=>x.id===structId); if(!s) return;
+  if(!s.checklist[itemId]) s.checklist[itemId] = {};
+  if(!s.checklist[itemId].photos) s.checklist[itemId].photos = [];
+  for(const f of files){
+    const data = await resizeImage(f);
+    s.checklist[itemId].photos.push({name:f.name, data});
+  }
+  save();
+  renderStructures();
+}
+
+function deletePhoto(id, idx){
+  state.checklist[id].photos.splice(idx,1);
+  save();
+  renderWalk();
+}
+
+function deleteStructPhoto(structId, itemId, idx){
+  const s = state.structures.find(x=>x.id===structId);
+  s.checklist[itemId].photos.splice(idx,1);
+  save();
+  renderStructures();
+}
+
+function resizeImage(file){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = ()=>{
+        const maxDim = 1280;
+        let w = img.width, h = img.height;
+        if(w > maxDim || h > maxDim){
+          if(w > h){ h = h * maxDim / w; w = maxDim; }
+          else { w = w * maxDim / h; h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL('image/jpeg',0.75));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// resize storefront a bit larger since it's used as a wide banner
+function resizeBanner(file){
+  return new Promise((resolve,reject)=>{
+    const reader = new FileReader();
+    reader.onload = e => {
+      const img = new Image();
+      img.onload = ()=>{
+        const maxDim = 1600;
+        let w = img.width, h = img.height;
+        if(w > maxDim || h > maxDim){
+          if(w > h){ h = h * maxDim / w; w = maxDim; }
+          else { w = w * maxDim / h; h = maxDim; }
+        }
+        const canvas = document.createElement('canvas');
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        resolve(canvas.toDataURL('image/jpeg',0.82));
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+// ============= STOREFRONT PHOTO =============
+async function setStorefront(file){
+  if(!file) return;
+  const data = await resizeBanner(file);
+  state.storefront = { name: file.name, data };
+  save();
+  renderStorefront();
+}
+
+function clearStorefront(){
+  if(!confirm('Remove storefront photo?')) return;
+  state.storefront = null;
+  save();
+  renderStorefront();
+}
+
+function renderStorefront(){
+  const area = document.getElementById('storefrontArea');
+  if(!area) return;
+  if(state.storefront && state.storefront.data){
+    area.innerHTML = `
+      <div class="storefront-preview">
+        <img src="${state.storefront.data}" onclick="openPhotoModal('${state.storefront.data}')">
+        <div class="storefront-actions">
+          <label>
+            🔄 Replace
+            <input type="file" accept="image/*" capture="environment" onchange="setStorefront(this.files[0])" style="display:none">
+          </label>
+          <button class="del" onclick="clearStorefront()">🗑 Remove</button>
+        </div>
+      </div>
+    `;
+  } else {
+    area.innerHTML = `
+      <div style="display:flex;gap:12px;flex-wrap:wrap">
+      <label class="storefront-empty" style="flex:1;min-width:180px">
+        <span class="cam" style="font-size:36px">📷</span>
+        <span style="font-size:14px;font-weight:600;margin-top:6px">Take Storefront Photo</span>
+        <span style="font-size:11px;color:var(--muted);margin-top:2px">Use phone camera</span>
+        <input type="file" accept="image/*" capture="environment" onchange="setStorefront(this.files[0])" style="display:none">
+      </label>
+
+      <label class="storefront-empty" style="flex:1;min-width:180px">
+        <span class="cam" style="font-size:36px">🖼️</span>
+        <span style="font-size:14px;font-weight:600;margin-top:6px">Upload Storefront Photo</span>
+        <span style="font-size:11px;color:var(--muted);margin-top:2px">Choose from gallery/files</span>
+        <input type="file" accept="image/*" onchange="setStorefront(this.files[0])" style="display:none">
+      </label>
+    </div>
+    `;
+  }
+}
+
+// ============= REFERENCE PHOTOS (non-issue, for-later reference) =============
+async function addRefPhoto(sectionKey, files){
+  if(!state.refPhotos[sectionKey]) state.refPhotos[sectionKey] = [];
+  for(const f of files){
+    const data = await resizeImage(f);
+    state.refPhotos[sectionKey].push({name:f.name, data, caption:''});
+  }
+  save();
+  if(sectionKey === '_global') renderGlobalRefPhotos();
+  else renderWalk();
+}
+
+function deleteRefPhoto(sectionKey, idx){
+  if(!confirm('Delete this reference photo?')) return;
+  state.refPhotos[sectionKey].splice(idx,1);
+  save();
+  if(sectionKey === '_global') renderGlobalRefPhotos();
+  else renderWalk();
+}
+
+function setRefCaption(sectionKey, idx, val){
+  if(state.refPhotos[sectionKey] && state.refPhotos[sectionKey][idx]){
+    state.refPhotos[sectionKey][idx].caption = val;
+    save();
+  }
+}
+
+async function addStructRefPhoto(structId, files){
+  const s = state.structures.find(x=>x.id===structId); if(!s) return;
+  if(!s.refPhotos) s.refPhotos = [];
+  for(const f of files){
+    const data = await resizeImage(f);
+    s.refPhotos.push({name:f.name, data, caption:''});
+  }
+  save();
+  renderStructures();
+}
+
+function deleteStructRefPhoto(structId, idx){
+  if(!confirm('Delete this reference photo?')) return;
+  const s = state.structures.find(x=>x.id===structId);
+  s.refPhotos.splice(idx,1);
+  save();
+  renderStructures();
+}
+
+function setStructRefCaption(structId, idx, val){
+  const s = state.structures.find(x=>x.id===structId);
+  if(s && s.refPhotos[idx]){ s.refPhotos[idx].caption = val; save(); }
+}
+
+function renderRefPhotoStrip(sectionKey, photos){
+  return `
+    <div class="ref-strip">
+      <div class="ref-header">
+        <span class="ref-label">📎 Reference Photos <span class="ref-count">${photos.length}</span></span>
+      </div>
+      <div class="photo-row">
+        ${photos.map((p,i)=>`
+          <div class="ref-thumb">
+            <div class="photo-thumb">
+              <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+              <button class="del" onclick="deleteRefPhoto('${sectionKey}',${i})">×</button>
+            </div>
+            <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="setRefCaption('${sectionKey}',${i},this.value)">
+          </div>
+        `).join('')}
+        <label class="photo-add">
+          <span class="cam">📷</span><span>Ref</span>
+          <input type="file" accept="image/*" capture="environment" multiple onchange="addRefPhoto('${sectionKey}',this.files)">
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function renderStructRefPhotoStrip(structId, photos){
+  return `
+    <div class="ref-strip">
+      <div class="ref-header">
+        <span class="ref-label">📎 Reference Photos <span class="ref-count">${photos.length}</span></span>
+      </div>
+      <div class="photo-row">
+        ${photos.map((p,i)=>`
+          <div class="ref-thumb">
+            <div class="photo-thumb">
+              <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+              <button class="del" onclick="deleteStructRefPhoto('${structId}',${i})">×</button>
+            </div>
+            <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="setStructRefCaption('${structId}',${i},this.value)">
+          </div>
+        `).join('')}
+        <label class="photo-add">
+          <span class="cam">📷</span><span>Ref</span>
+          <input type="file" accept="image/*" capture="environment" multiple onchange="addStructRefPhoto('${structId}',this.files)">
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function renderGlobalRefPhotos(){
+  const photos = state.refPhotos['_global'] || [];
+  const el = document.getElementById('globalRefList');
+  if(!el) return;
+  document.getElementById('globalRefCount').textContent = photos.length;
+  if(!photos.length){
+    el.innerHTML = `
+      <div class="empty"><span class="icon">📎</span>No reference photos yet<br><small>Anything you want to look back at later — counters, lights, layouts, signs, whatever.</small></div>
+      <label class="photo-add" style="width:100%;height:100px;font-size:14px;margin-top:12px">
+        <span class="cam" style="font-size:32px">📷</span><span>Take Reference Photo</span>
+        <input type="file" accept="image/*" capture="environment" multiple onchange="addRefPhoto('_global',this.files)">
+      </label>`;
+    return;
+  }
+  el.innerHTML = `
+    <div class="photo-row">
+      ${photos.map((p,i)=>`
+        <div class="ref-thumb" style="width:140px">
+          <div class="photo-thumb" style="width:140px;height:140px">
+            <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+            <button class="del" onclick="deleteRefPhoto('_global',${i})">×</button>
+          </div>
+          <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="setRefCaption('_global',${i},this.value)" style="width:140px">
+        </div>
+      `).join('')}
+      <label class="photo-add" style="width:140px;height:140px">
+        <span class="cam" style="font-size:28px">📷</span><span>Add</span>
+        <input type="file" accept="image/*" capture="environment" multiple onchange="addRefPhoto('_global',this.files)">
+      </label>
+    </div>
+  `;
+}
+
+// ============= STRUCTURES =============
+function addStructure(){
+  const type = prompt(`Outside structure type? Options:\n${Object.keys(STRUCTURE_TYPES).join(', ')}\n\n(e.g. Pole Barn)`);
+  if(!type) return;
+  const match = Object.keys(STRUCTURE_TYPES).find(t => t.toLowerCase() === type.toLowerCase().trim());
+  if(!match){ toast('Unknown structure type','error'); return; }
+  const existing = state.structures.filter(s=>s.type===match).length;
+  state.structures.push({
+    id: 'struct_'+Date.now(),
+    type: match,
+    name: `${match} ${existing+1}`,
+    checklist: {}
+  });
+  save();
+  renderStructures();
+}
+
+function deleteStructure(id){
+  if(!confirm('Delete this structure and all its findings?')) return;
+  state.structures = state.structures.filter(s=>s.id!==id);
+  save();
+  renderStructures();
+}
+
+function renameStructure(id, val){
+  const s = state.structures.find(x=>x.id===id); if(s){ s.name = val; save(); }
+}
+
+function renderStructures(){
+  document.getElementById('structCount').textContent = state.structures.length;
+  const container = document.getElementById('structuresList');
+  container.innerHTML = state.structures.map(s=>{
+    const items = STRUCTURE_TYPES[s.type] || [];
+    const stats = sectionStats(items, s.checklist);
+    if(!s.refPhotos) s.refPhotos = [];
+    return `
+      <div class="structure-card">
+        <div class="structure-header">
+          <div class="structure-name">
+            <input type="text" value="${escapeHtml(s.name)}" onchange="renameStructure('${s.id}',this.value)">
+            <div style="font-size:11px;color:var(--mccoys-green-dark);font-weight:600;margin-top:2px">${s.type}</div>
+          </div>
+          <div class="stats" style="font-size:11px;color:var(--mccoys-green-dark);display:flex;gap:8px;font-weight:700">
+            <span>✓${stats.ok}</span>
+            <span style="color:var(--mccoys-green-dark)">⚠${stats.issue}</span>
+            <span style="opacity:.6">—${stats.na}</span>
+            ${s.refPhotos.length ? `<span>📎${s.refPhotos.length}</span>` : ''}
+          </div>
+          <button class="structure-del" onclick="deleteStructure('${s.id}')">🗑</button>
+        </div>
+        <div class="section-body" style="display:block">
+          ${items.map(it=>{
+            const data = s.checklist[it.id] || {};
+            const status = data.status || '';
+            return `
+              <div class="item ${status==='issue'?'has-issue':''}">
+                <div class="item-label">${it.label}</div>
+                <div class="item-actions">
+                  <button class="btn-state ok ${status==='ok'?'active':''}" onclick="setStructStatus('${s.id}','${it.id}','ok')">OK</button>
+                  <button class="btn-state issue ${status==='issue'?'active':''}" onclick="setStructStatus('${s.id}','${it.id}','issue')">Issue</button>
+                  <button class="btn-state na ${status==='na'?'active':''}" onclick="setStructStatus('${s.id}','${it.id}','na')">N/A</button>
+                </div>
+              </div>
+              ${status==='issue' ? renderStructItemDetail(s.id, it) : ''}
+            `;
+          }).join('')}
+          ${renderStructRefPhotoStrip(s.id, s.refPhotos)}
+        </div>
+      </div>
+    `;
+  }).join('');
+  updateProgress();
+}
+
+function renderStructItemDetail(structId, item){
+  const s = state.structures.find(x=>x.id===structId);
+  const data = s.checklist[item.id] || {};
+  const notes = data.notes || '';
+  const photos = data.photos || [];
+  return `
+    <div class="item-detail" style="display:block">
+      <textarea placeholder="Describe — quantities, part numbers (e.g. 6&quot;x52&quot; arm green), dimensions..." onchange="setStructNotes('${structId}','${item.id}',this.value)">${escapeHtml(notes)}</textarea>
+      <div class="photo-row">
+        ${photos.map((p,i)=>`
+          <div class="photo-thumb">
+            <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+            <button class="del" onclick="deleteStructPhoto('${structId}','${item.id}',${i})">×</button>
+          </div>
+        `).join('')}
+        <label class="photo-add">
+          <span class="cam">📷</span><span>Camera</span>
+          <input type="file" accept="image/*" capture="environment" multiple onchange="addStructPhoto('${structId}','${item.id}',this.files)">
+        </label>
+
+        <label class="photo-add">
+          <span class="cam">🖼️</span><span>Upload</span>
+          <input type="file" accept="image/*" multiple onchange="addStructPhoto('${structId}','${item.id}',this.files)">
+        </label>
+      </div>
+    </div>
+  `;
+}
+
+function updateProgress(){
+  let total = 0, done = 0;
+  Object.values(CHECKLIST).forEach(items => items.forEach(it=>{
+    total++;
+    if((state.checklist[it.id]||{}).status) done++;
+  }));
+  state.structures.forEach(s=>{
+    (STRUCTURE_TYPES[s.type]||[]).forEach(it=>{
+      total++;
+      if((s.checklist[it.id]||{}).status) done++;
+    });
+  });
+  const pct = total ? Math.round(done/total*100) : 0;
+  const bar = document.getElementById('progressBar');
+  if(bar) bar.style.width = pct+'%';
+}
+
+// ============= FREE-FORM FINDINGS =============
+function addFreeForm(kind){
+  const f = {
+    id: 'ff_'+Date.now(),
+    kind, location:'', description:'', photos:[]
+  };
+  state.freeForm.push(f);
+  save();
+  renderReview();
+}
+
+function updateFreeForm(id, field, val){
+  const f = state.freeForm.find(x=>x.id===id); if(f){ f[field] = val; save(); }
+}
+
+function deleteFreeForm(id){
+  if(!confirm('Delete this finding?')) return;
+  state.freeForm = state.freeForm.filter(x=>x.id!==id);
+  save();
+  renderReview();
+}
+
+async function addFreeFormPhoto(id, files){
+  const f = state.freeForm.find(x=>x.id===id); if(!f) return;
+  for(const file of files){
+    const data = await resizeImage(file);
+    f.photos.push({name:file.name, data});
+  }
+  save();
+  renderReview();
+}
+
+function deleteFreeFormPhoto(id, idx){
+  const f = state.freeForm.find(x=>x.id===id);
+  f.photos.splice(idx,1);
+  save();
+  renderReview();
+}
+
+// ============= REVIEW PAGE =============
+function renderReview(){
+  // collect racking issues + facility issues from checklist + structures + free-form
+  const racking = collectFindings('racking');
+  const facility = collectFindings('facility');
+
+  document.getElementById('rackCount').textContent = racking.length;
+  document.getElementById('facCount').textContent = facility.length;
+
+  const renderFinding = (f) => {
+    if(f.freeForm){
+      return `
+        <div class="finding-card">
+          <div class="finding-meta">
+            <span class="tag ${f.kind}">${f.kind === 'racking' ? 'Racking' : 'Facility'} • Free-form</span>
+            <button class="structure-del" onclick="deleteFreeForm('${f.id}')">🗑</button>
+          </div>
+          <div class="field">
+            <label>Location</label>
+            <input type="text" placeholder="e.g. Pole Barn 2, drive-through" value="${escapeHtml(f.location)}" onchange="updateFreeForm('${f.id}','location',this.value)">
+          </div>
+          <div class="field">
+            <label>Description</label>
+            <textarea placeholder="Describe the issue..." onchange="updateFreeForm('${f.id}','description',this.value)">${escapeHtml(f.description)}</textarea>
+          </div>
+          <div class="photo-row">
+            ${(f.photos||[]).map((p,i)=>`
+              <div class="photo-thumb">
+                <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+                <button class="del" onclick="deleteFreeFormPhoto('${f.id}',${i})">×</button>
+              </div>
+            `).join('')}
+            <label class="photo-add">
+              <span class="cam">📷</span><span>Camera</span>
+              <input type="file" accept="image/*" capture="environment" multiple onchange="addFreeFormPhoto('${f.id}',this.files)">
+            </label>
+
+            <label class="photo-add">
+              <span class="cam">🖼️</span><span>Upload</span>
+              <input type="file" accept="image/*" multiple onchange="addFreeFormPhoto('${f.id}',this.files)">
+            </label>
+          </div>
+        </div>
+      `;
+    } else {
+      return `
+        <div class="finding-card">
+          <div class="finding-meta">
+            <span class="tag ${f.kind}">${f.location}</span>
+            <span style="font-size:11px;color:var(--muted)">${(f.photos||[]).length} 📷</span>
+          </div>
+          <div style="font-size:14px;font-weight:600;margin-bottom:4px">${f.label}</div>
+          ${f.notes ? `<div style="font-size:13px;color:var(--muted);white-space:pre-wrap">${escapeHtml(f.notes)}</div>` : '<div style="font-size:12px;color:var(--muted);font-style:italic">No notes added</div>'}
+        </div>
+      `;
+    }
+  };
+
+  document.getElementById('rackingList').innerHTML = racking.length
+    ? racking.map(renderFinding).join('')
+    : '<div class="empty"><span class="icon">🔧</span>No racking issues yet</div>';
+
+  document.getElementById('facilityList').innerHTML = facility.length
+    ? facility.map(renderFinding).join('')
+    : '<div class="empty"><span class="icon">🏪</span>No facility issues yet</div>';
+}
+
+function collectFindings(kind){
+  const out = [];
+  // checklist items
+  Object.entries(CHECKLIST).forEach(([section, items])=>{
+    items.forEach(it=>{
+      const d = state.checklist[it.id];
+      if(d && d.status === 'issue'){
+        const isRacking = RACKING_IDS.has(it.id);
+        if((kind==='racking' && isRacking) || (kind==='facility' && !isRacking)){
+          out.push({
+            id: it.id, location: section, label: it.label,
+            notes: d.notes || '', photos: d.photos || [], kind
+          });
+        }
+      }
+    });
+  });
+  // structures
+  state.structures.forEach(s=>{
+    (STRUCTURE_TYPES[s.type]||[]).forEach(it=>{
+      const d = s.checklist[it.id];
+      if(d && d.status === 'issue'){
+        const isRacking = RACKING_IDS.has(it.id);
+        if((kind==='racking' && isRacking) || (kind==='facility' && !isRacking)){
+          out.push({
+            id: it.id, location: s.name, label: it.label,
+            notes: d.notes || '', photos: d.photos || [], kind
+          });
+        }
+      }
+    });
+  });
+  // free-form
+  state.freeForm.filter(f=>f.kind===kind).forEach(f=>{
+    out.push({...f, freeForm:true});
+  });
+  return out;
+}
+
+// ============= PDF GENERATION =============
+async function generatePDF(kind){
+  const findings = collectFindings(kind);
+  if(findings.length === 0){
+    toast(`No ${kind} findings to export`,'error'); return;
+  }
+  if(!state.storeNumber || !state.storeName){
+    toast('Fill in store number & name first','error'); goTo('store'); return;
+  }
+
+  syncStoreFields();
+  const { jsPDF } = window.jspdf;
+  const doc = new jsPDF({unit:'pt', format:'letter'});
+  const pageW = doc.internal.pageSize.getWidth();
+  const pageH = doc.internal.pageSize.getHeight();
+  const margin = 40;
+  let y = margin;
+  const dateStr = state.surveyDate || new Date().toISOString().slice(0,10);
+  const reportTitle = kind === 'racking' ? 'Racking Report' : 'Facility Report';
+
+  // ===== COVER HEADER =====
+  if(state.storefront && state.storefront.data){
+    // Storefront photo banner across the top
+    try {
+      const img = new Image();
+      await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src = state.storefront.data; });
+      const bannerH = 200; // fixed banner height
+      const imgRatio = img.width / img.height;
+      const bannerW = pageW;
+      let drawW = bannerW, drawH = bannerH;
+      // cover-fit: scale to fill, may crop
+      const targetRatio = bannerW / bannerH;
+      if(imgRatio > targetRatio){
+        drawH = bannerH;
+        drawW = bannerH * imgRatio;
+      } else {
+        drawW = bannerW;
+        drawH = bannerW / imgRatio;
+      }
+      const offX = (bannerW - drawW) / 2;
+      const offY = (bannerH - drawH) / 2;
+      doc.addImage(state.storefront.data, 'JPEG', offX, offY, drawW, drawH);
+
+      // Dark green gradient overlay at bottom for text legibility
+      try {
+        doc.setFillColor(14,74,42);
+        doc.setGState(new doc.GState({opacity:0.78}));
+        doc.rect(0, bannerH - 78, pageW, 78, 'F');
+        doc.setGState(new doc.GState({opacity:1}));
+      } catch(e) {
+        doc.setFillColor(14,74,42);
+        doc.rect(0, bannerH - 78, pageW, 78, 'F');
+      }
+
+      // Yellow accent stripe under the banner (McCoy's signature)
+      doc.setFillColor(251,215,27);
+      doc.rect(0, bannerH, pageW, 6, 'F');
+
+      // McCoy's badge — yellow with dark green border, top-left
+      const badgeX = margin, badgeY = margin - 4, badgeW = 76, badgeH = 38;
+      doc.setFillColor(251,215,27);
+      doc.rect(badgeX, badgeY, badgeW, badgeH, 'F');
+      doc.setDrawColor(14,74,42);
+      doc.setLineWidth(2);
+      doc.rect(badgeX, badgeY, badgeW, badgeH, 'S');
+      doc.setTextColor(14,74,42);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(13);
+      doc.text("McCOY'S", badgeX + badgeW/2, badgeY + 17, {align:'center'});
+      doc.setFontSize(6);
+      doc.text("BUILDING SUPPLY", badgeX + badgeW/2, badgeY + 28, {align:'center'});
+
+      // Title text overlaid on dark green band
+      doc.setTextColor(251,215,27);
+      doc.setFont('helvetica','bold');
+      doc.setFontSize(10);
+      doc.text(reportTitle.toUpperCase(), margin, bannerH - 50);
+      doc.setTextColor(255,255,255);
+      doc.setFontSize(22);
+      doc.text(`Store ${state.storeNumber} — ${state.storeName}`, margin, bannerH - 26);
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(11);
+      doc.setTextColor(230,230,230);
+      doc.text(`${dateStr}  •  ${state.surveyorName||'—'}`, pageW - margin, bannerH - 26, {align:'right'});
+
+      y = bannerH + 28;
+    } catch(e){
+      console.error('storefront banner failed', e);
+      drawSimpleHeader();
+      y = 110;
+    }
+  } else {
+    drawSimpleHeader();
+    y = 110;
+  }
+
+  function drawSimpleHeader(){
+    // Dark green header band
+    doc.setFillColor(22,101,59);
+    doc.rect(0,0,pageW,80,'F');
+    // Yellow accent stripe
+    doc.setFillColor(251,215,27);
+    doc.rect(0,80,pageW,5,'F');
+
+    // McCoy's badge
+    const badgeX = margin, badgeY = 20, badgeW = 76, badgeH = 38;
+    doc.setFillColor(251,215,27);
+    doc.rect(badgeX, badgeY, badgeW, badgeH, 'F');
+    doc.setDrawColor(14,74,42);
+    doc.setLineWidth(2);
+    doc.rect(badgeX, badgeY, badgeW, badgeH, 'S');
+    doc.setTextColor(14,74,42);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(13);
+    doc.text("McCOY'S", badgeX + badgeW/2, badgeY + 17, {align:'center'});
+    doc.setFontSize(6);
+    doc.text("BUILDING SUPPLY", badgeX + badgeW/2, badgeY + 28, {align:'center'});
+
+    // Title block
+    doc.setTextColor(251,215,27);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(10);
+    doc.text(reportTitle.toUpperCase(), margin + badgeW + 16, 36);
+    doc.setTextColor(255,255,255);
+    doc.setFontSize(18);
+    doc.text(`Store ${state.storeNumber} — ${state.storeName}`, margin + badgeW + 16, 56);
+    doc.setFont('helvetica','normal');
+    doc.setFontSize(10);
+    doc.setTextColor(230,230,230);
+    doc.text(`${dateStr}  •  ${state.surveyorName||'—'}`, pageW - margin, 56, {align:'right'});
+  }
+
+  doc.setTextColor(40,40,40);
+  doc.setFontSize(10);
+  doc.text(`${findings.length} finding${findings.length===1?'':'s'}`, margin, y);
+  y += 20;
+
+  for(let i=0; i<findings.length; i++){
+    const f = findings[i];
+    if(y > pageH - 200){ doc.addPage(); y = margin; }
+
+    // Finding number box — McCoy's green band with yellow text
+    doc.setFillColor(22,101,59);
+    doc.rect(margin, y, pageW - margin*2, 24, 'F');
+    doc.setFillColor(251,215,27);
+    doc.rect(margin, y + 24, pageW - margin*2, 2, 'F');
+    doc.setTextColor(251,215,27);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(11);
+    doc.text(`#${i+1}  —  ${f.location}`, margin + 10, y + 16);
+    y += 34;
+
+    // Label
+    doc.setTextColor(20,20,20);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(12);
+    const label = f.freeForm ? (f.description.split('\n')[0]||'Finding') : f.label;
+    const labelLines = doc.splitTextToSize(label, pageW - margin*2);
+    doc.text(labelLines, margin, y);
+    y += labelLines.length * 14 + 4;
+
+    // Notes
+    const notes = f.freeForm ? f.description : f.notes;
+    if(notes && (!f.freeForm || notes !== label)){
+      doc.setFont('helvetica','normal');
+      doc.setFontSize(10);
+      doc.setTextColor(60,60,60);
+      const noteLines = doc.splitTextToSize(notes, pageW - margin*2);
+      // page break if needed
+      if(y + noteLines.length*12 > pageH - margin){ doc.addPage(); y = margin; }
+      doc.text(noteLines, margin, y);
+      y += noteLines.length * 12 + 8;
+    }
+
+    // Photos
+    const photos = f.photos || [];
+    if(photos.length){
+      const photoW = (pageW - margin*2 - 20) / 2;
+      const photoH = photoW * 0.75;
+      for(let p=0; p<photos.length; p++){
+        const col = p % 2;
+        if(col === 0 && y + photoH > pageH - margin){ doc.addPage(); y = margin; }
+        const x = margin + col * (photoW + 20);
+        try {
+          doc.addImage(photos[p].data, 'JPEG', x, y, photoW, photoH);
+        } catch(e){ console.error('photo embed failed', e); }
+        if(col === 1 || p === photos.length-1) y += photoH + 10;
+      }
+    }
+
+    y += 14;
+    // separator line
+    doc.setDrawColor(200,200,200);
+    doc.line(margin, y, pageW - margin, y);
+    y += 14;
+  }
+
+  // Footer on every page
+  const pageCount = doc.internal.getNumberOfPages();
+  for(let p=1; p<=pageCount; p++){
+    doc.setPage(p);
+    doc.setFontSize(8);
+    doc.setTextColor(150,150,150);
+    doc.text(`Store ${state.storeNumber} ${state.storeName} • ${kind} • Page ${p} of ${pageCount}`, pageW/2, pageH - 18, {align:'center'});
+  }
+
+  const filename = `${state.storeNumber}_${state.storeName}_${kind}_${dateStr}.pdf`.replace(/\s+/g,'_');
+  doc.save(filename);
+  toast(`✓ ${filename}`);
+}
+
+// ============= PHOTO ZIP =============
+async function downloadPhotoZip(){
+  syncStoreFields();
+  if(!state.storeNumber){ toast('Fill in store info first','error'); goTo('store'); return; }
+
+  const zip = new JSZip();
+  let count = 0;
+
+  const sanitize = s => (s||'').replace(/[^a-zA-Z0-9 _-]/g,'').trim().slice(0,80) || 'misc';
+
+  const addPhotos = (parentName, folderName, photos, useCaption=false) => {
+    if(!photos || !photos.length) return;
+    const folder = zip.folder(parentName).folder(sanitize(folderName));
+    photos.forEach((p,i)=>{
+      const ext = 'jpg';
+      let nameBit = (p.name||'photo').replace(/\.(jpg|jpeg|png)$/i,'').replace(/[^a-zA-Z0-9._-]/g,'_');
+      if(useCaption && p.caption) nameBit = sanitize(p.caption).replace(/\s+/g,'_') || nameBit;
+      const fname = `${String(i+1).padStart(2,'0')}_${nameBit}.${ext}`;
+      const base64 = p.data.split(',')[1];
+      folder.file(fname, base64, {base64:true});
+      count++;
+    });
+  };
+
+  // ----- ISSUES -----
+  // checklist issues
+  Object.entries(CHECKLIST).forEach(([section, items])=>{
+    items.forEach(it=>{
+      const d = state.checklist[it.id];
+      if(d && d.status==='issue' && d.photos && d.photos.length){
+        addPhotos('Issues', `${section} - ${it.label}`, d.photos);
+      }
+    });
+  });
+  // structure issues
+  state.structures.forEach(s=>{
+    (STRUCTURE_TYPES[s.type]||[]).forEach(it=>{
+      const d = s.checklist[it.id];
+      if(d && d.status==='issue' && d.photos && d.photos.length){
+        addPhotos('Issues', `${s.name} - ${it.label}`, d.photos);
+      }
+    });
+  });
+  // free-form
+  state.freeForm.forEach(f=>{
+    if(f.photos && f.photos.length){
+      const parent = f.kind==='racking' ? 'Issues_Racking' : 'Issues';
+      addPhotos(parent, `Free-form - ${f.location || 'Untitled'}`, f.photos);
+    }
+  });
+
+  // ----- REFERENCE PHOTOS -----
+  Object.entries(state.refPhotos || {}).forEach(([sectionKey, photos])=>{
+    if(!photos || !photos.length) return;
+    const label = sectionKey === '_global' ? 'General' : sectionKey;
+    addPhotos('Reference', label, photos, true);
+  });
+  state.structures.forEach(s=>{
+    if(s.refPhotos && s.refPhotos.length){
+      addPhotos('Reference', s.name, s.refPhotos, true);
+    }
+  });
+
+  if(count === 0){ toast('No photos to download','error'); return; }
+
+  toast(`Building zip with ${count} photos...`);
+  const blob = await zip.generateAsync({type:'blob'});
+  const filename = `${state.storeNumber}_${state.storeName}_photos_${state.surveyDate}.zip`.replace(/\s+/g,'_');
+  saveAs(blob, filename);
+}
+
+
+function downloadBlobMobile(blob, filename){
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.style.display = 'none';
+
+  document.body.appendChild(a);
+  a.click();
+
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 1000);
+}
+
+// ============= SAVE / LOAD SURVEY FILE (cross-device) =============
+function saveSurveyFile(){
+  syncStoreFields();
+  if(!state.storeNumber || !state.storeName){
+    toast('Fill in store number & name first','error'); goTo('store'); return;
+  }
+  const payload = {
+    _format: 'mccoys-inspection-v1',
+    _savedAt: new Date().toISOString(),
+    survey: state
+  };
+  const json = JSON.stringify(payload);
+  const sizeMB = (json.length / (1024*1024)).toFixed(1);
+  const blob = new Blob([json], {type:'application/json'});
+  const filename = `${state.storeNumber}_${state.storeName}_survey_${state.surveyDate}.json`.replace(/\s+/g,'_');
+  localStorage.setItem('mccoys_last_json_backup', json);
+  downloadBlobMobile(blob, filename);
+  toast(`✓ Saved ${filename} (${sizeMB} MB)`);
+}
+
+function loadSurveyFile(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const payload = JSON.parse(e.target.result);
+      if(!payload._format || !payload.survey){
+        toast('Not a valid survey file','error'); return;
+      }
+      // back up the current survey if it has content
+      const hasContent = state.storeNumber || state.storeName ||
+        Object.keys(state.checklist||{}).length > 0 ||
+        (state.structures||[]).length > 0;
+      if(hasContent){
+        if(!confirm('Loading this file will replace your current in-progress survey. The current survey will be moved to History. Continue?')){
+          return;
+        }
+        archiveCurrent();
+      }
+      state = payload.survey;
+      // migration safety
+      if(!state.refPhotos) state.refPhotos = {};
+      if(state.storefront === undefined) state.storefront = null;
+      state.structures = state.structures || [];
+      state.structures.forEach(s=>{ if(!s.refPhotos) s.refPhotos = []; });
+      state.freeForm = state.freeForm || [];
+      state.checklist = state.checklist || {};
+      // sync DOM
+      ['storeNumber','storeName','surveyDate','surveyorName'].forEach(k=>{
+        const el = document.getElementById(k);
+        if(el) el.value = state[k] || '';
+      });
+      save();
+      renderStorefront();
+      toast(`✓ Loaded: Store ${state.storeNumber} ${state.storeName}`);
+      // re-render whichever page is active
+      const active = document.querySelector('.page.active');
+      if(active){
+        const pageId = active.id.replace('page-','');
+        goTo(pageId);
+      }
+    } catch(err){
+      console.error(err);
+      toast('Could not read file — is it a survey .json?','error');
+    }
+  };
+  reader.onerror = () => toast('File read failed','error');
+  reader.readAsText(file);
+}
+
+// ============= HISTORY =============
+const HIST_KEY = 'mccoys_inspection_history';
+
+function archiveCurrent(){
+  if(!state.storeNumber && !state.storeName) return;
+  syncStoreFields();
+  const hist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+  hist.unshift({...state, archivedAt:Date.now()});
+  // cap at 10
+  while(hist.length > 10) hist.pop();
+  localStorage.setItem(HIST_KEY, JSON.stringify(hist));
+}
+
+function startNew(){
+  archiveCurrent();
+  state = {
+    storeNumber:'',storeName:'',surveyDate:new Date().toISOString().slice(0,10),surveyorName:'',
+    storefront:null,
+    checklist:{}, structures:[], freeForm:[], refPhotos:{}, createdAt:Date.now()
+  };
+  ['storeNumber','storeName','surveyorName'].forEach(k=>document.getElementById(k).value='');
+  document.getElementById('surveyDate').value = state.surveyDate;
+  save();
+  goTo('store');
+  toast('New survey started');
+}
+
+function renderHistory(){
+  const hist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+  const el = document.getElementById('historyList');
+  if(!hist.length){
+    el.innerHTML = '<div class="empty"><span class="icon">📚</span>No archived surveys yet.<br><small>Surveys archive when you start a new one.</small></div>';
+    return;
+  }
+  el.innerHTML = hist.map((h,i)=>{
+    const findings = countFindings(h);
+    return `
+      <div class="history-item" onclick="loadHistory(${i})">
+        <div style="flex:1">
+          <div class="h-store">Store ${h.storeNumber||'?'} — ${h.storeName||'(no name)'}</div>
+          <div class="h-meta">${h.surveyDate||'—'} • ${h.surveyorName||'—'}</div>
+          <div class="h-stats">🔧 ${findings.racking} racking • 🏪 ${findings.facility} facility</div>
+        </div>
+        <button class="history-del" onclick="event.stopPropagation();deleteHistory(${i})">🗑</button>
+      </div>
+    `;
+  }).join('');
+}
+
+function countFindings(h){
+  let racking=0, facility=0;
+  Object.values(CHECKLIST).forEach(items => items.forEach(it=>{
+    const d = (h.checklist||{})[it.id];
+    if(d && d.status==='issue'){
+      if(RACKING_IDS.has(it.id)) racking++; else facility++;
+    }
+  }));
+  (h.structures||[]).forEach(s=>{
+    (STRUCTURE_TYPES[s.type]||[]).forEach(it=>{
+      const d = s.checklist[it.id];
+      if(d && d.status==='issue'){
+        if(RACKING_IDS.has(it.id)) racking++; else facility++;
+      }
+    });
+  });
+  (h.freeForm||[]).forEach(f=>{
+    if(f.kind==='racking') racking++; else facility++;
+  });
+  return {racking, facility};
+}
+
+function loadHistory(idx){
+  if(!confirm('Load this survey? Current in-progress survey will be archived.')) return;
+  archiveCurrent();
+  const hist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+  state = hist[idx];
+  // remove from history (it's "in progress" again)
+  hist.splice(idx,1);
+  localStorage.setItem(HIST_KEY, JSON.stringify(hist));
+  save();
+  ['storeNumber','storeName','surveyDate','surveyorName'].forEach(k=>{
+    document.getElementById(k).value = state[k]||'';
+  });
+  goTo('store');
+  toast('Survey loaded');
+}
+
+function deleteHistory(idx){
+  if(!confirm('Delete this archived survey?')) return;
+  const hist = JSON.parse(localStorage.getItem(HIST_KEY) || '[]');
+  hist.splice(idx,1);
+  localStorage.setItem(HIST_KEY, JSON.stringify(hist));
+  renderHistory();
+}
+
+// ============= UTILITIES =============
+function syncStoreFields(){
+  state.storeNumber = document.getElementById('storeNumber').value.trim();
+  state.storeName = document.getElementById('storeName').value.trim();
+  state.surveyDate = document.getElementById('surveyDate').value;
+  state.surveyorName = document.getElementById('surveyorName').value.trim();
+  save();
+}
+
+['storeNumber','storeName','surveyDate','surveyorName'].forEach(k=>{
+  document.addEventListener('DOMContentLoaded',()=>{
+    const el = document.getElementById(k);
+    if(el) el.addEventListener('input', ()=>{state[k]=el.value;save();});
+  });
+});
+
+function escapeHtml(s){ return (s||'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+function toast(msg, kind){
+  const t = document.createElement('div');
+  t.className = 'toast' + (kind==='error'?' error':'');
+  t.textContent = msg;
+  document.body.appendChild(t);
+  setTimeout(()=>t.remove(), 2800);
+}
+
+function openPhotoModal(src){
+  document.getElementById('modalImg').src = src;
+  document.getElementById('photoModal').classList.add('open');
+}
+function closePhotoModal(){
+  document.getElementById('photoModal').classList.remove('open');
+}
+
+// ============= INIT =============
+window.addEventListener('DOMContentLoaded', ()=>{
+  load();
+  goTo('store');
+  renderStorefront();
+});
+</script>
+
+</body>
+</html>
