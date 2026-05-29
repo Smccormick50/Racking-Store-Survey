@@ -234,10 +234,19 @@ h3{font-size:18px;font-weight:800;margin:18px 0 12px;color:var(--green);text-tra
 
 /* ===== PARTS ENTRY ===== */
 .parts-block{background:#fff;border:1.5px solid var(--green);border-radius:8px;padding:12px;margin:10px 0 12px}
-.parts-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.parts-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px}
 .parts-label{font-size:12px;font-weight:800;color:var(--green);text-transform:uppercase;letter-spacing:.6px;display:flex;align-items:center;gap:6px}
 .parts-label .ti{font-size:16px}
-.parts-count{background:var(--green);color:var(--yellow);font-size:11px;font-weight:800;padding:2px 8px;border-radius:10px;min-width:22px;text-align:center}
+.parts-count{background:var(--green);color:var(--yellow);font-size:11px;font-weight:800;padding:2px 8px;border-radius:10px;min-width:22px;text-align:center;margin-left:auto}
+.parts-dismiss{background:transparent;border:1.5px solid var(--border);color:var(--muted);width:28px;height:28px;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0;transition:all .12s}
+.parts-dismiss:hover,.parts-dismiss:active{background:var(--bad);border-color:var(--bad);color:#fff;transform:scale(.94)}
+.parts-dismiss .ti{font-size:15px}
+
+/* Collapsed "+ Add Parts Needed" button — appears in place of the dismissed parts block */
+.parts-block-collapsed{margin:10px 0 12px}
+.parts-restore-btn{background:#fff;border:1.5px dashed var(--green);color:var(--green);padding:11px 14px;border-radius:8px;font-size:12px;font-weight:700;cursor:pointer;width:100%;display:flex;align-items:center;justify-content:center;gap:6px;text-transform:uppercase;letter-spacing:.4px;transition:all .12s}
+.parts-restore-btn:hover,.parts-restore-btn:active{background:#eef5f0;border-color:var(--green-mid);border-style:solid}
+.parts-restore-btn .ti{font-size:15px}
 .parts-list{display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
 .part-row{background:var(--yellow-soft);border:1px solid var(--yellow-dark);border-radius:6px;padding:8px}
 .part-row-fields{display:grid;grid-template-columns:60px 1fr 1fr auto;gap:6px;align-items:center}
@@ -1801,7 +1810,7 @@ function renderItemDetail(item){
   const carpentry = data.carpentry === true;
   return `
     <div class="item-detail" style="display:block">
-      ${isRacking ? renderPartsBlock('checklist', item.id, data.parts || []) : renderCarpentryToggle('checklist', item.id, carpentry)}
+      ${isRacking ? renderPartsBlock('checklist', item.id, data.parts || [], data.partsHidden === true) : renderCarpentryToggle('checklist', item.id, carpentry)}
       <textarea placeholder="${isRacking ? 'Notes — context, location details, urgency...' : 'Describe — quantities, part numbers, dimensions...'}" onchange="setNotes('${item.id}',this.value)">${escapeHtml(notes)}</textarea>
       <div class="photo-row">
         ${photos.map((p,i)=>`
@@ -1832,12 +1841,21 @@ function renderCarpentryToggle(scope, id, checked){
 
 // ============= PARTS ENTRY UI =============
 // scope is 'checklist' | 'struct' | 'freeform', id encodes which one
-function renderPartsBlock(scope, id, parts){
+function renderPartsBlock(scope, id, parts, dismissed){
+  // If user dismissed the parts block AND no parts have been added yet, show the compact "Add Parts" button instead
+  if(dismissed === true && (!parts || parts.length === 0)){
+    return `
+      <div class="parts-block-collapsed">
+        <button class="parts-restore-btn" onclick="restorePartsBlock('${scope}','${id}')"><i class="ti ti-tool"></i> + Add Parts Needed</button>
+      </div>
+    `;
+  }
   return `
     <div class="parts-block">
       <div class="parts-header">
         <span class="parts-label"><i class="ti ti-tool"></i> Parts Needed</span>
         <span class="parts-count">${parts.length}</span>
+        <button class="parts-dismiss" onclick="dismissPartsBlock('${scope}','${id}')" title="Hide parts block"><i class="ti ti-x"></i></button>
       </div>
       <div class="parts-list">
         ${parts.map((p,i)=>renderPartRow(scope, id, p, i)).join('')}
@@ -1845,6 +1863,50 @@ function renderPartsBlock(scope, id, parts){
       <button class="parts-add" onclick="addPart('${scope}','${id}')"><i class="ti ti-plus"></i> Add Part</button>
     </div>
   `;
+}
+
+// Helper to resolve scope|id to the underlying data record
+function getPartsDataRecord(scope, id){
+  if(scope === 'checklist'){
+    if(!state.checklist[id]) state.checklist[id] = {};
+    return state.checklist[id];
+  } else if(scope === 'struct'){
+    const [structId, itemId] = id.split('|');
+    const s = state.structures.find(x=>x.id===structId); if(!s) return null;
+    if(!s.checklist[itemId]) s.checklist[itemId] = {};
+    return s.checklist[itemId];
+  } else if(scope === 'freeform'){
+    return state.freeForm.find(x=>x.id===id) || null;
+  }
+  return null;
+}
+
+function dismissPartsBlock(scope, id){
+  const rec = getPartsDataRecord(scope, id); if(!rec) return;
+  // If parts already exist, ask for confirmation since they'll be wiped
+  if(rec.parts && rec.parts.length > 0){
+    if(!confirm(`Hide parts block? The ${rec.parts.length} part${rec.parts.length===1?'':'s'} you added will be removed.`)) return;
+    rec.parts = [];
+  }
+  rec.partsHidden = true;
+  save();
+  // Re-render the affected detail panel
+  if(scope === 'checklist') updateItemInPlace(id);
+  else if(scope === 'struct'){
+    const [structId, itemId] = id.split('|');
+    updateStructItemInPlace(structId, itemId);
+  } else if(scope === 'freeform') renderReview();
+}
+
+function restorePartsBlock(scope, id){
+  const rec = getPartsDataRecord(scope, id); if(!rec) return;
+  rec.partsHidden = false;
+  save();
+  if(scope === 'checklist') updateItemInPlace(id);
+  else if(scope === 'struct'){
+    const [structId, itemId] = id.split('|');
+    updateStructItemInPlace(structId, itemId);
+  } else if(scope === 'freeform') renderReview();
 }
 
 function renderPartRow(scope, id, part, idx){
@@ -2531,7 +2593,7 @@ function renderStructItemDetail(structId, item){
   const carpentry = data.carpentry === true;
   return `
     <div class="item-detail" style="display:block">
-      ${isRacking ? renderPartsBlock('struct', `${structId}|${item.id}`, data.parts || []) : renderCarpentryToggle('struct', `${structId}|${item.id}`, carpentry)}
+      ${isRacking ? renderPartsBlock('struct', `${structId}|${item.id}`, data.parts || [], data.partsHidden === true) : renderCarpentryToggle('struct', `${structId}|${item.id}`, carpentry)}
       <textarea placeholder="${isRacking ? 'Notes — context, location details, urgency...' : 'Describe — quantities, part numbers, dimensions...'}" onchange="setStructNotes('${structId}','${item.id}',this.value)">${escapeHtml(notes)}</textarea>
       <div class="photo-row">
         ${photos.map((p,i)=>`
@@ -2614,7 +2676,7 @@ function renderReview(){
             <label>Location</label>
             <input type="text" placeholder="e.g. Pole Barn 2, drive-through" value="${escapeHtml(f.location)}" onchange="updateFreeForm('${f.id}','location',this.value)">
           </div>
-          ${f.kind === 'racking' ? renderPartsBlock('freeform', f.id, f.parts || []) : renderCarpentryToggle('freeform', f.id, f.carpentry === true)}
+          ${f.kind === 'racking' ? renderPartsBlock('freeform', f.id, f.parts || [], f.partsHidden === true) : renderCarpentryToggle('freeform', f.id, f.carpentry === true)}
           <div class="field">
             <label>${f.kind === 'racking' ? 'Notes' : 'Description'}</label>
             <textarea placeholder="${f.kind === 'racking' ? 'Notes — context, location details, urgency...' : 'Describe the issue...'}" onchange="updateFreeForm('${f.id}','description',this.value)">${escapeHtml(f.description)}</textarea>
@@ -2797,11 +2859,12 @@ async function generatePDF(kind, opts){
   opts = opts || {};
   let findings;
   if(kind === 'full'){
-    // Combine all three sets, each finding tagged with its sectionKind for section headers in PDF
+    // Complete Survey: Racking + Facility sections only.
+    // Carpentry items appear inside the Facility section, flagged with a yellow stripe and ">> CARPENTRY" tag.
+    // The dedicated Carpentry PDF (kind === 'carpentry') still exists as its own document for the in-house team.
     const racking = collectFindings('racking').map(f => ({...f, sectionKind:'racking'}));
     const facility = collectFindings('facility').map(f => ({...f, sectionKind:'facility'}));
-    const carpentry = collectFindings('carpentry').map(f => ({...f, sectionKind:'carpentry'}));
-    findings = [...racking, ...facility, ...carpentry];
+    findings = [...racking, ...facility];
   } else {
     findings = collectFindings(kind);
   }
@@ -2936,8 +2999,9 @@ async function generatePDF(kind, opts){
     // Breakdown counts
     const rCount = findings.filter(f=>f.sectionKind==='racking').length;
     const fCount = findings.filter(f=>f.sectionKind==='facility').length;
-    const cCount = findings.filter(f=>f.sectionKind==='carpentry').length;
-    doc.text(`${findings.length} TOTAL FINDINGS  ·  ${rCount} RACKING  ·  ${fCount} FACILITY  ·  ${cCount} CARPENTRY`, margin, y);
+    // Carpentry items live inside facility now, count them as a subset (flagged with carpentry: true)
+    const cCount = findings.filter(f=>f.sectionKind==='facility' && f.carpentry === true).length;
+    doc.text(`${findings.length} TOTAL FINDINGS  ·  ${rCount} RACKING  ·  ${fCount} FACILITY  (${cCount} ROUTED TO CARPENTRY)`, margin, y);
   } else {
     doc.text(`${findings.length} FINDING${findings.length===1?'':'S'}`, margin, y);
   }
@@ -3067,7 +3131,23 @@ async function generatePDF(kind, opts){
 
       // Render each condition item
       conditionItems.forEach((c, idx)=>{
-        if(y > pageH - 220){ doc.addPage(); y = margin; }
+        // Pre-calculate how much vertical space this item needs so the header doesn't end up alone at the bottom of a page
+        const photoW = (pageW - margin*2 - 20) / 2;
+        const photoH = photoW * 0.75;
+        const labelLines = doc.splitTextToSize(c.label, pageW - margin*2);
+        const noteLines = c.notes ? doc.splitTextToSize(c.notes, pageW - margin*2) : [];
+        const photoRows = c.photos && c.photos.length ? Math.ceil(c.photos.length / 2) : 0;
+        // header (44) + label height + qty tag (18 if present) + notes height + photo rows OR no-photo notice (36) + bottom spacing (28)
+        const neededH = 44
+          + labelLines.length * 14 + 4
+          + (c.inline && c.inline.value ? 18 : 0)
+          + noteLines.length * 12 + (c.notes ? 8 : 0)
+          + (photoRows > 0 ? photoRows * (photoH + 10) : 36)
+          + 28;
+        // If the whole block won't fit, just page-break now. If even one page can't hold it, let it spill (rare with many photos).
+        if(y + Math.min(neededH, pageH - margin*2) > pageH - margin){
+          doc.addPage(); y = margin;
+        }
 
         // Mini-header bar for this condition item
         doc.setFillColor(22,101,59);
@@ -3081,7 +3161,7 @@ async function generatePDF(kind, opts){
           : c.status === 'warn' ? '  [NEEDS WORK]'
           : c.status === 'bad' ? '  [ISSUE]'
           : c.status === 'na' ? '  [N/A]'
-          : '';
+          : '  [NOT MARKED]';
         doc.text(`#${idx+1}  ·  ${c.location}${statusLabel}`, margin + 10, y + 17);
         y += 44;
 
@@ -3089,7 +3169,6 @@ async function generatePDF(kind, opts){
         doc.setTextColor(20,20,20);
         doc.setFont('helvetica','bold');
         doc.setFontSize(12);
-        const labelLines = doc.splitTextToSize(c.label, pageW - margin*2);
         doc.text(labelLines, margin, y);
         y += labelLines.length * 14 + 4;
 
@@ -3113,18 +3192,15 @@ async function generatePDF(kind, opts){
           doc.setFont('helvetica','normal');
           doc.setFontSize(10);
           doc.setTextColor(60,60,60);
-          const noteLines = doc.splitTextToSize(c.notes, pageW - margin*2);
-          if(y + noteLines.length*12 > pageH - margin){ doc.addPage(); y = margin; }
           doc.text(noteLines, margin, y);
           y += noteLines.length * 12 + 8;
         }
 
         // Photos OR "no condition photo taken" notice
         if(c.photos && c.photos.length){
-          const photoW = (pageW - margin*2 - 20) / 2;
-          const photoH = photoW * 0.75;
           for(let p=0; p<c.photos.length; p++){
             const col = p % 2;
+            // Only page-break between rows of photos, not mid-row
             if(col === 0 && y + photoH > pageH - margin){ doc.addPage(); y = margin; }
             const x = margin + col * (photoW + 20);
             try { doc.addImage(c.photos[p].data,'JPEG',x,y,photoW,photoH); }
@@ -3196,16 +3272,44 @@ async function generatePDF(kind, opts){
     }
     sectionFindingIndex++;
 
-    if(y > pageH - 220){ doc.addPage(); y = margin; }
+    // Precompute the finding's total height so we can page-break BEFORE the header
+    // if the whole block won't fit on the remaining page.
+    const _photoW = (pageW - margin*2 - 20) / 2;
+    const _photoH = _photoW * 0.75;
+    const _photos = f.photos || [];
+    const _photoRows = _photos.length ? Math.ceil(_photos.length / 2) : 0;
+    const _label = f.freeForm ? (f.description.split('\n')[0]||'Finding') : f.label;
+    const _labelLines = doc.splitTextToSize(_label, pageW - margin*2);
+    const _notes = f.freeForm ? f.description : f.notes;
+    const _noteLines = (_notes && (!f.freeForm || _notes !== _label))
+      ? doc.splitTextToSize(_notes, pageW - margin*2) : [];
+    const _showCarpRouted = f.carpentry === true && (
+      kind === 'facility' || (kind === 'full' && f.sectionKind === 'facility')
+    );
+    const _showParts = kind === 'racking' || (kind === 'full' && f.sectionKind === 'racking');
+    const _validParts = (_showParts && f.parts && f.parts.length)
+      ? f.parts.filter(p => p.rackType && p.description && p.quantity && (!p.description.toLowerCase().includes('other / custom') || (p.customDescription && p.customDescription.trim())))
+      : [];
+    const _neededH = 44
+      + (_showCarpRouted ? 14 : 0)
+      + _labelLines.length * 14 + 4
+      + (f.inline && f.inline.value ? 18 : 0)
+      + _noteLines.length * 12 + (_noteLines.length ? 8 : 0)
+      + (_validParts.length ? (16 + _validParts.length * 13 + 6) : 0)
+      + _photoRows * (_photoH + 10)
+      + 28;
+    // If the entire finding fits on a fresh page but not in remaining space, break now.
+    // If even a fresh page can't hold it (huge photos / many parts), allow spill.
+    if(y + Math.min(_neededH, pageH - margin*2 - 40) > pageH - margin){
+      doc.addPage(); y = margin;
+    }
 
     // Decide if this finding should show the carpentry routed badge
     // - In Facility PDF: yes, when item.carpentry === true
     // - In Full PDF facility section: yes too
     // - In Carpentry PDF: not needed (whole section IS carpentry)
     // - In Racking PDF: never (racking items don't route to carpentry)
-    const showCarpRouted = f.carpentry === true && (
-      kind === 'facility' || (kind === 'full' && f.sectionKind === 'facility')
-    );
+    const showCarpRouted = _showCarpRouted;
 
     // Finding number bar (green with yellow stripe)
     doc.setFillColor(22,101,59);
@@ -3216,7 +3320,7 @@ async function generatePDF(kind, opts){
     doc.setFont('helvetica','bold');
     doc.setFontSize(11);
     const statusTag = f.freeForm ? '' : (f.status === 'warn' ? '  [NEEDS WORK]' : '  [ISSUE]');
-    const carpTag = showCarpRouted ? '  → CARPENTRY' : '';
+    const carpTag = showCarpRouted ? '  >> CARPENTRY' : '';
     const findingNumber = kind === 'full' ? sectionFindingIndex : (i+1);
     doc.text(`#${findingNumber}  ·  ${f.location}${statusTag}${carpTag}`, margin + 10, y + 17);
     y += 44;  // green bar (26) + yellow stripe (2) + breathing room (16)
