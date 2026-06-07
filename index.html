@@ -267,7 +267,11 @@ h3{font-size:18px;font-weight:800;margin:18px 0 12px;color:var(--green);text-tra
 .photo-thumb{position:relative;width:72px;height:72px;border-radius:6px;overflow:hidden;background:#fafaf6;border:1px solid var(--border)}
 .photo-thumb img{width:100%;height:100%;object-fit:cover;cursor:pointer}
 .photo-thumb .del{position:absolute;top:3px;right:3px;background:rgba(0,0,0,.78);color:#fff;border:none;width:20px;height:20px;border-radius:50%;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700;line-height:1}
-.photo-add-group{display:flex;flex-direction:column;gap:5px}
+.photo-add-group{display:flex;flex-direction:column;gap:5px;position:relative;border-radius:8px;transition:background .15s,box-shadow .15s}
+.photo-add-group .photo-drop-hint{display:none;position:absolute;inset:-6px;border:2px dashed var(--green);border-radius:10px;background:rgba(14,74,42,.08);color:var(--green);font-size:12px;font-weight:800;align-items:center;justify-content:center;letter-spacing:.5px;text-transform:uppercase;pointer-events:none;z-index:5;text-align:center;backdrop-filter:blur(1px);-webkit-backdrop-filter:blur(1px)}
+.photo-add-group.drag-over{box-shadow:0 0 0 3px rgba(14,74,42,.18)}
+.photo-add-group.drag-over .photo-drop-hint{display:flex;background:rgba(245,209,22,.85);color:var(--green);border-color:var(--green);border-style:solid;animation:dropPulse 1s ease-in-out infinite}
+@keyframes dropPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.02)}}
 .photo-add{height:33px;min-width:72px;background:#fff;border:1.5px dashed var(--green-mid);border-radius:5px;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--green-mid);font-size:11px;font-weight:700;cursor:pointer;padding:0 8px}
 .photo-add .ti{font-size:15px}
 .photo-add:hover{background:#eef5f0}
@@ -300,6 +304,14 @@ h3{font-size:18px;font-weight:800;margin:18px 0 12px;color:var(--green);text-tra
 .structure-name input{background:transparent;border:none;color:var(--green);font-weight:800;font-size:15px;width:100%;padding:0}
 .structure-name input:focus{outline:none}
 .structure-name .struct-type{font-size:11px;font-weight:600;color:var(--green-mid);margin-top:2px;text-transform:uppercase;letter-spacing:.5px}
+.struct-customized-badge{background:var(--yellow);color:var(--green);padding:1px 7px;border-radius:8px;font-size:10px;font-weight:800;letter-spacing:.5px}
+
+/* Reset-to-default row inside a customized structure card */
+.struct-reset-row{display:none;padding:10px 16px;background:#fff8d6;border-top:1px dashed var(--yellow-dark);justify-content:center}
+body.edit-mode .struct-reset-row{display:flex}
+.struct-reset-btn{background:#fff;border:1.5px solid var(--yellow-dark);color:#8a5a00;padding:8px 14px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-transform:uppercase;letter-spacing:.3px}
+.struct-reset-btn:hover,.struct-reset-btn:active{background:var(--yellow);color:var(--green)}
+.struct-reset-btn .ti{font-size:14px}
 .structure-del{background:var(--bad);border:none;color:#fff;cursor:pointer;font-size:18px;width:38px;height:38px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0;box-shadow:0 1px 3px rgba(0,0,0,.2)}
 .structure-del:hover,.structure-del:active{background:#a01818;transform:scale(.96)}
 .structure-del .ti{font-size:20px}
@@ -1040,6 +1052,23 @@ function ensureStructureTypesOverride(){
   return state.structureTypesOverride;
 }
 
+// Per-instance structure items: each structure may have its own `itemsOverride` array.
+// If set, it OVERRIDES the master template for THAT structure only. Other structures
+// of the same type stay on the template. Saved with the survey, so loading from
+// History restores customized structures.
+function structItems(s){
+  if(s && Array.isArray(s.itemsOverride)) return s.itemsOverride;
+  return currentStructureTypes()[s.type] || [];
+}
+
+function ensureStructItemsOverride(s){
+  if(!Array.isArray(s.itemsOverride)){
+    // Deep-copy the template items so edits don't mutate the master constant
+    s.itemsOverride = JSON.parse(JSON.stringify(currentStructureTypes()[s.type] || []));
+  }
+  return s.itemsOverride;
+}
+
 // Edit mode flag — UI only, not saved
 let editMode = false;
 
@@ -1109,6 +1138,72 @@ function removeItem(sectionName, itemId, itemLabel){
   save();
   renderWalk();
   toast('Item removed','ok');
+}
+
+// ===== PER-STRUCTURE ITEM EDITS =====
+// These edits live on the structure instance (s.itemsOverride) — they affect only THIS structure,
+// not other structures of the same type, and not the master template.
+
+function addItemToStruct(structId){
+  const s = state.structures.find(x=>x.id===structId);
+  if(!s) return;
+  const inputEl = document.querySelector(`.add-item-row[data-struct-id="${structId}"] input`);
+  if(!inputEl) return;
+  const label = inputEl.value.trim();
+  if(!label){ toast('Enter an item label first','error'); return; }
+  const items = ensureStructItemsOverride(s);
+  // Unique id: prefix from struct type + timestamp
+  const idPrefix = (s.type || 'st').toLowerCase().replace(/[^a-z]/g,'').slice(0,4) || 'st';
+  const newId = `${idPrefix}_custom_${Date.now()}`;
+  items.push({ id: newId, label: label, custom: true });
+  inputEl.value = '';
+  save();
+  renderStructures();
+  toast('Added: ' + label,'ok');
+}
+
+function renameStructItem(structId, itemId, newLabel){
+  newLabel = (newLabel||'').trim();
+  if(!newLabel){ toast('Item label cannot be empty','error'); renderStructures(); return; }
+  const s = state.structures.find(x=>x.id===structId);
+  if(!s) return;
+  const items = ensureStructItemsOverride(s);
+  const item = items.find(it=>it.id===itemId);
+  if(item){ item.label = newLabel; save(); }
+}
+
+function removeStructItem(structId, itemId, itemLabel){
+  const s = state.structures.find(x=>x.id===structId);
+  if(!s) return;
+  if(!confirm(`Remove "${itemLabel}" from ${s.name}?\n\nAny status, notes, or photos on this item will also be deleted.\n\n(Other ${s.type} structures still keep this item.)`)) return;
+  const items = ensureStructItemsOverride(s);
+  const idx = items.findIndex(it=>it.id===itemId);
+  if(idx < 0) return;
+  items.splice(idx, 1);
+  // Also clean up any data tied to this item on this structure
+  if(s.checklist) delete s.checklist[itemId];
+  save();
+  renderStructures();
+  toast('Item removed from '+s.name,'ok');
+}
+
+function resetStructItems(structId){
+  const s = state.structures.find(x=>x.id===structId);
+  if(!s) return;
+  if(!confirm(`Reset ${s.name}'s items back to the default ${s.type} template?\n\nCustom items you added will be removed. Status/notes/photos on items that exist in the default template will be kept.`)) return;
+  // Get the template items
+  const templateItems = currentStructureTypes()[s.type] || [];
+  const templateIds = new Set(templateItems.map(it=>it.id));
+  // Clean up checklist data for items that won't exist after reset
+  if(s.checklist){
+    Object.keys(s.checklist).forEach(itemId => {
+      if(!templateIds.has(itemId)) delete s.checklist[itemId];
+    });
+  }
+  delete s.itemsOverride;
+  save();
+  renderStructures();
+  toast('Reset to default '+s.type+' template','ok');
 }
 
 // Rename a section
@@ -1535,6 +1630,16 @@ function migrate(){
   state.structures.forEach(s=>{ if(!s.refPhotos) s.refPhotos = []; });
   state.freeForm = state.freeForm || [];
   state.checklist = state.checklist || {};
+
+  // One-time migration: old "Restrooms" ref photos → Men's Restroom (kept together)
+  // After Restrooms was split into Men's/Women's, photos stored under the old key
+  // would otherwise be orphaned. We move them to Men's so they're visible again.
+  if(state.refPhotos.Restrooms && state.refPhotos.Restrooms.length){
+    state.refPhotos["Men's Restroom"] = (state.refPhotos["Men's Restroom"] || []).concat(state.refPhotos.Restrooms);
+    delete state.refPhotos.Restrooms;
+    // Defer toast until UI is ready
+    setTimeout(()=>toast("Old Restrooms reference photos moved to Men's Restroom","ok"), 800);
+  }
 }
 
 function syncFormFromState(){
@@ -1588,7 +1693,7 @@ function goTo(page){
 function totalItems(){
   let n = 0;
   Object.values(currentChecklist()).forEach(sec => n += sec.items.length);
-  state.structures.forEach(s => n += (currentStructureTypes()[s.type]||[]).length);
+  state.structures.forEach(s => n += structItems(s).length);
   return n;
 }
 
@@ -1598,7 +1703,7 @@ function countByStatus(){
     const s = (state.checklist[it.id]||{}).status || 'none';
     out[s] = (out[s]||0) + 1;
   }));
-  state.structures.forEach(s => (currentStructureTypes()[s.type]||[]).forEach(it=>{
+  state.structures.forEach(s => structItems(s).forEach(it=>{
     const st = (s.checklist[it.id]||{}).status || 'none';
     out[st] = (out[st]||0) + 1;
   }));
@@ -2003,7 +2108,7 @@ function rerenderAfterPartEdit(scope, id){
 
 function renderPhotoButtons(handler){
   return `
-    <div class="photo-add-group">
+    <div class="photo-add-group" data-photo-handler>
       <label class="photo-add">
         <i class="ti ti-camera"></i> Camera
         <input type="file" accept="image/*" capture="environment" multiple onchange="${handler}">
@@ -2012,8 +2117,97 @@ function renderPhotoButtons(handler){
         <i class="ti ti-upload"></i> Upload
         <input type="file" accept="image/*" multiple onchange="${handler}">
       </label>
+      <div class="photo-drop-hint">Drag photos here</div>
     </div>
   `;
+}
+
+// ============= DRAG-AND-DROP PHOTO UPLOADS =============
+// Works at document level via event delegation. Any .photo-add-group or .photo-row accepts
+// dropped image files. The drop dispatches to the existing onchange handler of that zone's
+// upload input, so all existing photo handling (resize, save, in-place render) works unchanged.
+
+let _dndDragCounter = 0; // tracks nested dragenter/leave so leaving a child doesn't kill the indicator
+
+function setupPhotoDragDrop(){
+  if(window._photoDndInstalled) return;
+  window._photoDndInstalled = true;
+
+  // Prevent the browser from navigating to the file if it's dropped outside any zone
+  document.addEventListener('dragover', e => { e.preventDefault(); });
+  document.addEventListener('drop', e => {
+    // Only handle if NOT on a known photo zone — block default to avoid opening the file
+    const zone = findPhotoDropZone(e.target);
+    if(!zone) { e.preventDefault(); }
+  });
+
+  document.addEventListener('dragenter', e => {
+    const zone = findPhotoDropZone(e.target);
+    if(!zone) return;
+    e.preventDefault();
+    _dndDragCounter++;
+    zone.classList.add('drag-over');
+  });
+
+  document.addEventListener('dragleave', e => {
+    const zone = findPhotoDropZone(e.target);
+    if(!zone) return;
+    _dndDragCounter = Math.max(0, _dndDragCounter - 1);
+    if(_dndDragCounter === 0){
+      document.querySelectorAll('.photo-add-group.drag-over').forEach(el => el.classList.remove('drag-over'));
+    }
+  });
+
+  document.addEventListener('drop', e => {
+    const zone = findPhotoDropZone(e.target);
+    if(!zone) return;
+    e.preventDefault();
+    e.stopPropagation();
+    _dndDragCounter = 0;
+    document.querySelectorAll('.photo-add-group.drag-over').forEach(el => el.classList.remove('drag-over'));
+
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if(!files || !files.length) return;
+    // Filter to images only
+    const imageFiles = Array.from(files).filter(f => f.type && f.type.startsWith('image/'));
+    if(!imageFiles.length){ toast('Only image files can be dropped','error'); return; }
+
+    // Find the upload-type file input within the zone and dispatch
+    const uploadInput = zone.querySelector('label.photo-add.upload input[type="file"]');
+    if(!uploadInput) return;
+
+    // Build a DataTransfer to assign to .files (so the existing onchange handler can read this.files)
+    try {
+      const dt = new DataTransfer();
+      imageFiles.forEach(f => dt.items.add(f));
+      uploadInput.files = dt.files;
+      // Fire change event which triggers the inline onchange handler
+      uploadInput.dispatchEvent(new Event('change', { bubbles: true }));
+    } catch(err){
+      // DataTransfer.items.add not supported in some old browsers — fall back to direct handler invocation
+      // Parse the onchange attribute (a string like "addPhoto('id_x',this.files)") and exec with files
+      const handlerAttr = uploadInput.getAttribute('onchange');
+      if(handlerAttr){
+        try {
+          const fn = new Function('files', handlerAttr.replace(/this\.files/g, 'files'));
+          fn(imageFiles);
+        } catch(execErr){
+          console.error('DnD fallback failed', execErr);
+          toast('Drag-drop not supported, use Upload button','error');
+        }
+      }
+    }
+  });
+}
+
+// Find the nearest .photo-add-group ancestor (the drop target zone)
+function findPhotoDropZone(target){
+  let el = target;
+  while(el && el !== document){
+    if(el.classList && el.classList.contains('photo-add-group')) return el;
+    el = el.parentNode;
+  }
+  return null;
 }
 
 function setStatus(id, status){
@@ -2072,7 +2266,7 @@ function updateItemInPlace(itemId){
 
 function updateStructItemInPlace(structId, itemId){
   const s = state.structures.find(x=>x.id===structId); if(!s) return;
-  const item = (currentStructureTypes()[s.type]||[]).find(it=>it.id===itemId);
+  const item = structItems(s).find(it=>it.id===itemId);
   if(!item){ renderStructures(); return; }
 
   // Find this item element inside this structure's card
@@ -2111,7 +2305,7 @@ function updateSectionBadge(sectionName){
 
 function updateStructCount(structId){
   const s = state.structures.find(x=>x.id===structId); if(!s) return;
-  const items = currentStructureTypes()[s.type] || [];
+  const items = structItems(s);
   const counts = sectionCounts(items, s.checklist);
   // Update the struct-type line for this card
   document.querySelectorAll('.structure-card').forEach(card=>{
@@ -2401,9 +2595,12 @@ function setStructRefCaption(structId, idx, val){
 }
 
 function renderRefStrip(sectionKey, photos, isStruct){
+  // Escape the section key for safe embedding in onclick attributes — apostrophes in names like
+  // "Men's Restroom" would otherwise terminate the JS string literal and break the handlers.
+  const safeKey = cssEscape(sectionKey);
   const addHandler = isStruct
-    ? `addStructRefPhoto('${sectionKey}',this.files)`
-    : `addRefPhoto('${sectionKey}',this.files)`;
+    ? `addStructRefPhoto('${safeKey}',this.files)`
+    : `addRefPhoto('${safeKey}',this.files)`;
   const delHandler = isStruct ? 'deleteStructRefPhoto' : 'deleteRefPhoto';
   const capHandler = isStruct ? 'setStructRefCaption' : 'setRefCaption';
   return `
@@ -2416,9 +2613,9 @@ function renderRefStrip(sectionKey, photos, isStruct){
           <div class="ref-thumb">
             <div class="photo-thumb">
               <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
-              <button class="del" onclick="${delHandler}('${sectionKey}',${i})">×</button>
+              <button class="del" onclick="${delHandler}('${safeKey}',${i})">×</button>
             </div>
-            <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="${capHandler}('${sectionKey}',${i},this.value)">
+            <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="${capHandler}('${safeKey}',${i},this.value)">
           </div>
         `).join('')}
         ${renderPhotoButtons(addHandler)}
@@ -2524,20 +2721,26 @@ function renameStructure(id, val){
 function renderStructures(){
   const container = document.getElementById('structuresList');
   container.innerHTML = state.structures.map(s=>{
-    const items = currentStructureTypes()[s.type] || [];
+    const items = structItems(s);
     const counts = sectionCounts(items, s.checklist);
     if(!s.refPhotos) s.refPhotos = [];
+    const isCustomized = Array.isArray(s.itemsOverride);
     return `
       <div class="structure-card">
         <div class="structure-header">
           <div class="structure-name">
             <input type="text" value="${escapeHtml(s.name)}" onchange="renameStructure('${s.id}',this.value)">
-            <div class="struct-type">${s.type} · ${counts.done} / ${counts.total}</div>
+            <div class="struct-type">${s.type} · ${counts.done} / ${counts.total}${isCustomized?' · <span class="struct-customized-badge">CUSTOMIZED</span>':''}</div>
           </div>
           <button class="structure-del" onclick="deleteStructure('${s.id}')" aria-label="Delete this structure"><i class="ti ti-trash"></i></button>
         </div>
         <div>
           ${items.map(it => renderStructItemRow(s, it)).join('')}
+          <div class="add-item-row" data-struct-id="${s.id}">
+            <input type="text" placeholder="Add custom item to ${escapeHtml(s.name)} (e.g. 'Bird netting check')" onkeydown="if(event.key==='Enter'){addItemToStruct('${s.id}');event.preventDefault()}">
+            <button onclick="addItemToStruct('${s.id}')"><i class="ti ti-plus"></i> Add</button>
+          </div>
+          ${isCustomized ? `<div class="struct-reset-row"><button class="struct-reset-btn" onclick="resetStructItems('${s.id}')"><i class="ti ti-refresh"></i> Reset items to default ${escapeHtml(s.type)} template</button></div>` : ''}
           ${renderRefStrip(s.id, s.refPhotos, true)}
           <div class="structure-footer">
             <button class="structure-del-btn" onclick="deleteStructure('${s.id}')"><i class="ti ti-trash"></i> Delete this ${escapeHtml(s.type)}</button>
@@ -2554,11 +2757,18 @@ function renderStructItemRow(s, it){
   const status = data.status || '';
   const showDetail = (status === 'warn' || status === 'bad');
   const inlineInputHtml = it.inlineInput ? renderStructInlineInput(s.id, it, data) : '';
+  const isCustom = it.custom === true;
   return `
-    <div class="item ${showDetail?'has-detail':''} ${it.inlineInput?'has-inline':''}" data-struct-id="${s.id}" data-item-id="${it.id}">
+    <div class="item ${showDetail?'has-detail':''} ${it.inlineInput?'has-inline':''} ${isCustom?'edited':''}" data-struct-id="${s.id}" data-item-id="${it.id}">
       <div class="item-label">
-        <div>${it.label}</div>
+        ${editMode
+          ? `<input class="item-label-input" type="text" value="${escapeHtml(it.label)}" onchange="renameStructItem('${s.id}','${it.id}',this.value)">`
+          : `<div>${it.label}</div>`
+        }
         ${inlineInputHtml}
+      </div>
+      <div class="edit-item-controls">
+        <button class="edit-btn del" onclick="removeStructItem('${s.id}','${it.id}',${JSON.stringify(it.label)})" title="Remove this item from ${escapeHtml(s.name)}"><i class="ti ti-trash"></i></button>
       </div>
       <div class="item-actions">
         <button class="btn-state ok ${status==='ok'?'active':''}" onclick="setStructStatus('${s.id}','${it.id}','ok')"><i class="ti ti-check"></i></button>
@@ -2758,7 +2968,7 @@ function collectFindings(kind){
     });
   });
   state.structures.forEach(s=>{
-    (currentStructureTypes()[s.type]||[]).forEach(it=>{
+    structItems(s).forEach(it=>{
       const d = s.checklist[it.id];
       if(!isFinding(d)) return;
       const isRacking = RACKING_IDS.has(it.id);
@@ -3480,7 +3690,7 @@ async function downloadPhotoZip(opts){
     });
   });
   state.structures.forEach(s=>{
-    (currentStructureTypes()[s.type]||[]).forEach(it=>{
+    structItems(s).forEach(it=>{
       const d = s.checklist[it.id];
       if(d && (d.status==='warn' || d.status==='bad') && d.photos && d.photos.length){
         addPhotos('Issues', `${s.name} - ${it.label}`, d.photos);
@@ -3807,7 +4017,7 @@ function countHistoryFindings(h){
     }
   }));
   (h.structures||[]).forEach(s=>{
-    (currentStructureTypes()[s.type]||[]).forEach(it=>{
+    structItems(s).forEach(it=>{
       const d = s.checklist[it.id];
       if(isFinding(d)){
         if(RACKING_IDS.has(it.id)) racking++; else facility++;
@@ -3883,6 +4093,8 @@ window.addEventListener('DOMContentLoaded', async ()=>{
     const el = document.getElementById(k);
     if(el) el.addEventListener('input', ()=>{ state[k] = el.value; el.classList.remove('field-error'); save(); });
   });
+  // Enable drag-and-drop photo uploads on every .photo-add-group zone
+  setupPhotoDragDrop();
   // Update storage gauge periodically
   setInterval(updateStorageGauge, 30000);
 });
