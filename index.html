@@ -272,10 +272,11 @@ h3{font-size:18px;font-weight:800;margin:18px 0 12px;color:var(--green);text-tra
 .photo-add-group.drag-over{box-shadow:0 0 0 3px rgba(14,74,42,.18)}
 .photo-add-group.drag-over .photo-drop-hint{display:flex;background:rgba(245,209,22,.85);color:var(--green);border-color:var(--green);border-style:solid;animation:dropPulse 1s ease-in-out infinite}
 @keyframes dropPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.02)}}
-.photo-add{height:33px;min-width:72px;background:#fff;border:1.5px dashed var(--green-mid);border-radius:5px;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--green-mid);font-size:11px;font-weight:700;cursor:pointer;padding:0 8px}
+.photo-add{height:33px;min-width:72px;background:#fff;border:1.5px dashed var(--green-mid);border-radius:5px;display:flex;align-items:center;justify-content:center;gap:5px;color:var(--green-mid);font-size:11px;font-weight:700;cursor:pointer;padding:0 8px;position:relative;overflow:hidden}
 .photo-add .ti{font-size:15px}
 .photo-add:hover{background:#eef5f0}
-.photo-add input{display:none}
+/* Visually hidden but still clickable via the wrapping label. display:none can break label-triggered file pickers in some browsers. */
+.photo-add input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none;left:-9999px}
 .photo-add.upload{background:var(--yellow-soft);border-color:var(--yellow-dark);color:#5b4400}
 .photo-add.upload:hover{background:#fff0a0}
 
@@ -2525,14 +2526,29 @@ function renderStorefront(){
 
 // ============= REFERENCE PHOTOS =============
 async function addRefPhoto(sectionKey, files){
-  if(!state.refPhotos[sectionKey]) state.refPhotos[sectionKey] = [];
-  for(const f of files){
-    const data = await resizeImage(f);
-    state.refPhotos[sectionKey].push({name:f.name, data, caption:''});
+  try {
+    if(!files || !files.length){ return; }
+    if(!state.refPhotos[sectionKey]) state.refPhotos[sectionKey] = [];
+    let added = 0;
+    for(const f of files){
+      try {
+        const data = await resizeImage(f);
+        state.refPhotos[sectionKey].push({name:f.name, data, caption:''});
+        added++;
+      } catch(imgErr){
+        console.error('Failed to process photo:', f.name, imgErr);
+        toast(`Couldn't process ${f.name}: ${imgErr.message||'unknown error'}`, 'error');
+      }
+    }
+    if(added === 0) return;
+    save();
+    if(sectionKey === '_global') renderGlobalRefPhotos();
+    else updateRefStripInPlace(sectionKey, false);
+    toast(`${added} photo${added===1?'':'s'} added`, 'ok');
+  } catch(e){
+    console.error('addRefPhoto failed:', e);
+    toast(`Photo upload failed: ${e.message||'unknown error'}`, 'error');
   }
-  save();
-  if(sectionKey === '_global') renderGlobalRefPhotos();
-  else updateRefStripInPlace(sectionKey, false);
 }
 
 function deleteRefPhoto(sectionKey, idx){
@@ -2548,19 +2564,19 @@ function updateRefStripInPlace(key, isStruct){
   const photos = isStruct
     ? (state.structures.find(x=>x.id===key)?.refPhotos || [])
     : (state.refPhotos[key] || []);
-  // Find the existing ref strip
-  const sections = document.querySelectorAll('.ref-strip');
-  for(const strip of sections){
-    // Locate by matching one of the buttons (which include the section key)
-    const handlerInput = strip.querySelector('input[onchange*="' + key + '"]');
-    if(handlerInput){
+  // Find by data-section-key — robust against any characters (apostrophes, quotes, special chars)
+  // We loop manually instead of using attribute selectors because attribute selectors require
+  // escaping for special characters that vary by browser implementation.
+  const strips = document.querySelectorAll('.ref-strip');
+  for(const strip of strips){
+    if(strip.dataset.sectionKey === key && strip.dataset.isStruct === (isStruct ? '1' : '0')){
       const wrapper = document.createElement('div');
       wrapper.innerHTML = renderRefStrip(key, photos, isStruct);
       strip.replaceWith(wrapper.firstElementChild);
       return;
     }
   }
-  // Fallback - if we couldn't find it, do nothing (data is saved)
+  // Fallback - if we couldn't find it (e.g. ref strip wasn't rendered yet), do nothing (data is saved)
 }
 
 function setRefCaption(sectionKey, idx, val){
@@ -2603,8 +2619,9 @@ function renderRefStrip(sectionKey, photos, isStruct){
     : `addRefPhoto('${safeKey}',this.files)`;
   const delHandler = isStruct ? 'deleteStructRefPhoto' : 'deleteRefPhoto';
   const capHandler = isStruct ? 'setStructRefCaption' : 'setRefCaption';
+  // data-section-key lets updateRefStripInPlace find this strip without fragile string matching against onchange
   return `
-    <div class="ref-strip">
+    <div class="ref-strip" data-section-key="${escapeHtml(sectionKey)}" data-is-struct="${isStruct ? '1' : '0'}">
       <div class="ref-header">
         <span class="ref-label"><i class="ti ti-paperclip"></i> Reference Photos <span class="ref-count">${photos.length}</span></span>
       </div>
