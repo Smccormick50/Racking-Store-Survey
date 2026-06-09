@@ -363,10 +363,38 @@ body.edit-mode .struct-reset-row{display:flex}
 /* ===== LOAD BANNER ===== */
 .load-banner{background:linear-gradient(135deg,var(--yellow-soft) 0%,#fff 100%);border:2px solid var(--yellow);border-radius:8px;padding:14px 16px;margin-bottom:18px;display:flex;align-items:center;gap:12px}
 
-.storage-gauge{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--muted);background:#eef5f0;border:1px solid #c8e0d2;padding:6px 12px;border-radius:14px;margin-bottom:18px;font-weight:600}
+.storage-gauge{display:inline-flex;align-items:center;gap:8px;font-size:12px;color:var(--muted);background:#eef5f0;border:1px solid #c8e0d2;padding:6px 6px 6px 12px;border-radius:14px;margin-bottom:18px;font-weight:600;cursor:pointer;transition:background .15s,border-color .15s}
+.storage-gauge:hover,.storage-gauge:active{background:#dceadd;border-color:#a0c8af}
+.storage-gauge .gauge-text{flex:1}
+.storage-gauge .gauge-cta{background:var(--green);color:var(--yellow);padding:3px 9px;border-radius:9px;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.3px}
 .storage-gauge .ti{font-size:14px;color:var(--green-mid)}
 .storage-gauge.warn{background:#fff4e0;border-color:#f4c97a;color:#8a5a00}
 .storage-gauge.warn .ti{color:#c08400}
+.storage-gauge.warn .gauge-cta{background:#c08400;color:#fff}
+.storage-gauge.danger{background:#fde6e6;border-color:#e57878;color:#8a1818}
+.storage-gauge.danger .ti{color:var(--bad)}
+.storage-gauge.danger .gauge-cta{background:var(--bad);color:#fff}
+
+/* Storage manager modal sections */
+.storage-section{background:#fff;border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+.storage-section-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
+.storage-section-header h4{margin:0;font-size:13px;color:var(--green);text-transform:uppercase;letter-spacing:.5px;font-weight:800}
+.storage-section-size{font-size:13px;font-weight:800;color:var(--text);background:var(--yellow-soft);padding:3px 9px;border-radius:9px;border:1px solid var(--yellow-dark)}
+.storage-section.storage-section-danger{background:#fff5f5;border-color:#e5a5a5}
+.storage-detail{font-size:12px;color:#444;line-height:1.5;margin-bottom:10px}
+.storage-row{display:flex;align-items:center;gap:8px;padding:8px 0;border-top:1px solid var(--border-soft)}
+.storage-row-info{flex:1;min-width:0}
+.storage-row-name{font-size:13px;font-weight:700;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.storage-row-meta{font-size:11px;color:var(--muted);margin-top:2px}
+.storage-row-del{background:transparent;border:1.5px solid var(--bad);color:var(--bad);width:32px;height:32px;border-radius:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.storage-row-del:hover,.storage-row-del:active{background:var(--bad);color:#fff}
+.storage-row-del .ti{font-size:15px}
+.storage-actions{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.btn-secondary-row,.btn-danger-row{background:#fff;border:1.5px solid var(--bad);color:var(--bad);padding:9px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px;text-transform:uppercase;letter-spacing:.3px;width:100%}
+.btn-secondary-row:hover,.btn-secondary-row:active,.btn-danger-row:hover,.btn-danger-row:active{background:var(--bad);color:#fff}
+.btn-danger-row{background:var(--bad);color:#fff}
+.btn-danger-row:hover,.btn-danger-row:active{background:#a01818}
+.btn-secondary-row .ti,.btn-danger-row .ti{font-size:14px}
 
 /* ===== CARPENTRY TOGGLE ===== */
 .carpentry-toggle{display:flex;align-items:center;gap:12px;background:#fff;border:1.5px solid var(--border);border-radius:8px;padding:12px 14px;margin:10px 0 12px;cursor:pointer;transition:all .15s;user-select:none}
@@ -528,7 +556,22 @@ body.edit-mode .struct-reset-row{display:flex}
   <h1>McCoy's Store Inspection</h1>
   <p class="page-subtitle">Field Survey Tool</p>
 
-  <div id="storageGauge" class="storage-gauge" style="display:none"></div>
+  <div id="storageGauge" class="storage-gauge" style="display:none" onclick="openStorageManager()" title="Tap to manage storage">
+  </div>
+
+  <!-- Storage Manager Modal (emergency tool for when storage gets too full) -->
+  <div class="edit-modal" id="storageManager" onclick="if(event.target===this)closeStorageManager()">
+    <div class="edit-modal-panel">
+      <div class="edit-modal-header">
+        <h2><i class="ti ti-database"></i> Storage Manager</h2>
+        <button class="edit-modal-close" onclick="closeStorageManager()"><i class="ti ti-x"></i></button>
+      </div>
+      <div class="edit-modal-body" id="storageManagerBody"></div>
+      <div class="edit-modal-footer">
+        <button class="btn btn-secondary" onclick="closeStorageManager()"><i class="ti ti-x"></i> Close</button>
+      </div>
+    </div>
+  </div>
 
   <h3 style="margin-top:0" id="storeInfoHeading">Store Information</h3>
   <div class="form-grid">
@@ -1612,12 +1655,220 @@ async function updateStorageGauge(){
       const pct = Math.round((est.usage / est.quota) * 100);
       const gauge = document.getElementById('storageGauge');
       if(gauge){
-        gauge.innerHTML = `<i class="ti ti-database"></i> ${usedMB} MB used / ${quotaMB} MB available`;
+        // Compute approximate size of current survey + history
+        let surveyEst = 0;
+        try { surveyEst = estimateStateSize(state); } catch(e){}
+        const surveyMB = (surveyEst / (1024*1024)).toFixed(1);
+        gauge.innerHTML = `
+          <i class="ti ti-database"></i>
+          <span class="gauge-text">${usedMB} MB used  ·  Current survey: ${surveyMB} MB</span>
+          <span class="gauge-cta">Manage</span>
+        `;
         gauge.style.display = '';
-        if(pct > 80){ gauge.classList.add('warn'); }
+        gauge.classList.remove('warn','danger');
+        if(est.usage > 200 * 1024 * 1024 || pct > 80){ gauge.classList.add('danger'); }
+        else if(est.usage > 50 * 1024 * 1024 || pct > 50){ gauge.classList.add('warn'); }
       }
     }
   } catch(e){ /* not supported, ignore */ }
+}
+
+// Rough byte size estimator for a state object (just the size of its JSON serialization)
+function estimateStateSize(obj){
+  try {
+    // Quick path: stringify length × 2 (approx UTF-16). For very large blobs this can be slow.
+    const json = JSON.stringify(obj);
+    return json.length;
+  } catch(e){
+    return 0;
+  }
+}
+
+// Count photos in a survey object
+function countPhotosIn(survey){
+  let n = 0;
+  if(survey.storefront && survey.storefront.data) n++;
+  if(survey.checklist){
+    Object.values(survey.checklist).forEach(d => { if(d.photos) n += d.photos.length; });
+  }
+  if(survey.structures){
+    survey.structures.forEach(s => {
+      if(s.checklist) Object.values(s.checklist).forEach(d => { if(d.photos) n += d.photos.length; });
+      if(s.refPhotos) n += s.refPhotos.length;
+    });
+  }
+  if(survey.freeForm){
+    survey.freeForm.forEach(f => { if(f.photos) n += f.photos.length; });
+  }
+  if(survey.refPhotos){
+    Object.values(survey.refPhotos).forEach(arr => { if(Array.isArray(arr)) n += arr.length; });
+  }
+  return n;
+}
+
+// ===== STORAGE MANAGER =====
+async function openStorageManager(){
+  const modal = document.getElementById('storageManager');
+  if(!modal) return;
+  modal.classList.add('open');
+  await renderStorageManager();
+}
+
+function closeStorageManager(){
+  const modal = document.getElementById('storageManager');
+  if(modal) modal.classList.remove('open');
+}
+
+async function renderStorageManager(){
+  const body = document.getElementById('storageManagerBody');
+  if(!body) return;
+  body.innerHTML = '<p style="color:var(--muted)"><i class="ti ti-loader-2"></i> Inspecting storage...</p>';
+
+  let totalUsage = 0, totalQuota = 0;
+  try {
+    if(navigator.storage && navigator.storage.estimate){
+      const est = await navigator.storage.estimate();
+      totalUsage = est.usage || 0;
+      totalQuota = est.quota || 0;
+    }
+  } catch(e){}
+
+  const currentSize = estimateStateSize(state);
+  const currentPhotos = countPhotosIn(state);
+  let hist = [];
+  try { hist = await getHistory() || []; } catch(e){}
+  const histRows = hist.map((h,i) => ({
+    idx: i,
+    name: `${h.storeNumber||'?'} ${h.storeName||'(no name)'}`.trim(),
+    date: h.surveyDate || '?',
+    photos: countPhotosIn(h),
+    size: estimateStateSize(h),
+    archivedAt: h.archivedAt
+  }));
+  const histTotal = histRows.reduce((s,r)=>s+r.size, 0);
+
+  const fmt = bytes => (bytes / (1024*1024)).toFixed(1) + ' MB';
+
+  body.innerHTML = `
+    <p style="font-size:13px;color:var(--muted);margin:0 0 14px">Surveys and photos saved on this device. Use the buttons below to clean up.</p>
+
+    <div class="storage-section">
+      <div class="storage-section-header">
+        <h4>Total Browser Storage</h4>
+        <span class="storage-section-size">${fmt(totalUsage)}${totalQuota ? ' / ' + fmt(totalQuota) : ''}</span>
+      </div>
+    </div>
+
+    <div class="storage-section">
+      <div class="storage-section-header">
+        <h4>Current Survey</h4>
+        <span class="storage-section-size">${fmt(currentSize)}</span>
+      </div>
+      <div class="storage-detail">
+        Store ${state.storeNumber||'(none)'} — ${state.storeName||'(no name)'}<br>
+        ${currentPhotos} photos · ${(state.structures||[]).length} structures
+      </div>
+      <div class="storage-actions">
+        <button class="btn-secondary-row" onclick="if(confirm('Discard the current in-progress survey?\\n\\nAll data will be lost permanently unless you saved it first via the Save Survey File button.')) clearCurrentSurvey()">
+          <i class="ti ti-trash"></i> Discard current survey
+        </button>
+      </div>
+    </div>
+
+    <div class="storage-section">
+      <div class="storage-section-header">
+        <h4>Archived History (${histRows.length})</h4>
+        <span class="storage-section-size">${fmt(histTotal)}</span>
+      </div>
+      ${histRows.length === 0
+        ? '<div class="storage-detail" style="text-align:center;padding:14px 0;font-style:italic">No archived surveys</div>'
+        : histRows.map(r => `
+          <div class="storage-row">
+            <div class="storage-row-info">
+              <div class="storage-row-name">${escapeHtml(r.name)}</div>
+              <div class="storage-row-meta">${r.date} · ${r.photos} photos · ${fmt(r.size)}</div>
+            </div>
+            <button class="storage-row-del" onclick="deleteHistoryFromManager(${r.idx})" title="Delete this archived survey"><i class="ti ti-trash"></i></button>
+          </div>
+        `).join('')
+      }
+      ${histRows.length > 0 ? `
+        <div class="storage-actions">
+          <button class="btn-secondary-row" onclick="clearAllHistory()">
+            <i class="ti ti-trash"></i> Delete all archived history
+          </button>
+        </div>
+      ` : ''}
+    </div>
+
+    <div class="storage-section storage-section-danger">
+      <div class="storage-section-header">
+        <h4 style="color:var(--bad)">Nuclear Option</h4>
+      </div>
+      <div class="storage-detail">If the app is completely stuck and won't load or save, this clears everything and starts fresh. <strong>You will lose all surveys and history.</strong> Save any in-progress work via the Save Survey File button first if possible.</div>
+      <div class="storage-actions">
+        <button class="btn-danger-row" onclick="nukeAllStorage()">
+          <i class="ti ti-alert-triangle"></i> Erase all McCoy's Inspection data
+        </button>
+      </div>
+    </div>
+  `;
+}
+
+async function clearCurrentSurvey(){
+  state = newState();
+  try { await localforage.removeItem(SAVE_KEY); } catch(e){}
+  syncFormFromState();
+  renderStorefront();
+  renderWalk();
+  closeStorageManager();
+  updateStorageGauge();
+  toast('Current survey cleared','ok');
+}
+
+async function deleteHistoryFromManager(idx){
+  if(!confirm('Delete this archived survey? Cannot be undone.')) return;
+  try {
+    const hist = (await getHistory()) || [];
+    hist.splice(idx, 1);
+    await setHistory(hist);
+    await renderStorageManager();
+    updateStorageGauge();
+    toast('Archived survey deleted','ok');
+  } catch(e){
+    toast('Delete failed: ' + (e.message||'unknown'),'error');
+  }
+}
+
+async function clearAllHistory(){
+  if(!confirm('Delete ALL archived surveys? Cannot be undone.\n\nThis will NOT affect your current in-progress survey.')) return;
+  try {
+    await setHistory([]);
+    await renderStorageManager();
+    updateStorageGauge();
+    toast('All history cleared','ok');
+  } catch(e){
+    toast('Clear failed: ' + (e.message||'unknown'),'error');
+  }
+}
+
+async function nukeAllStorage(){
+  if(!confirm('ERASE EVERYTHING?\n\nThis deletes:\n• The current survey\n• All archived history\n• All saved data\n\nYou will need to start fresh. This CANNOT be undone.')) return;
+  if(!confirm('Are you absolutely sure? This is your last chance to cancel.')) return;
+  try {
+    await localforage.clear();
+    // Also remove any legacy localStorage keys
+    try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem(HIST_KEY); } catch(e){}
+    state = newState();
+    syncFormFromState();
+    renderStorefront();
+    renderWalk();
+    closeStorageManager();
+    updateStorageGauge();
+    toast('All data erased — starting fresh','ok');
+  } catch(e){
+    toast('Erase failed: ' + (e.message||'unknown'),'error');
+  }
 }
 
 function migrate(){
@@ -2421,7 +2672,9 @@ function resizeImage(file){
     reader.onload = e => {
       const img = new Image();
       img.onload = ()=>{
-        const maxDim = 1280;
+        // Reduced from 1280px @ 75% to 1024px @ 65% - ~40-50% smaller files.
+        // Still plenty clear for documenting issues (text on signs is readable, damage details visible).
+        const maxDim = 1024;
         let w = img.width, h = img.height;
         if(w > maxDim || h > maxDim){
           if(w > h){ h = h * maxDim / w; w = maxDim; }
@@ -2430,7 +2683,7 @@ function resizeImage(file){
         const canvas = document.createElement('canvas');
         canvas.width = w; canvas.height = h;
         canvas.getContext('2d').drawImage(img,0,0,w,h);
-        resolve(canvas.toDataURL('image/jpeg',0.75));
+        resolve(canvas.toDataURL('image/jpeg',0.65));
       };
       img.onerror = reject;
       img.src = e.target.result;
@@ -3957,7 +4210,19 @@ function loadSurveyFile(file){
         (state.structures||[]).length > 0;
       if(hasContent){
         if(!confirm('Loading this file will replace your current in-progress survey. The current survey will be moved to History. Continue?')) return;
-        await archiveCurrent();
+        try {
+          await archiveCurrent();
+        } catch(archiveErr){
+          // Archive failed (likely out of storage). Offer the user a way out.
+          const proceed = confirm(
+            'Could not archive your current survey — storage appears to be full.\n\n' +
+            'Press OK to DISCARD the current survey and load the new file anyway.\n' +
+            'Press Cancel to stop and use the Storage Manager (tap the storage bar) to free up space first.'
+          );
+          if(!proceed) return;
+          // Discard current without archiving
+          try { await localforage.removeItem(SAVE_KEY); } catch(e){}
+        }
       }
 
       state = Object.assign(newState(), surveyData);
@@ -3982,11 +4247,19 @@ function loadSurveyFile(file){
 async function archiveCurrent(){
   if(!state.storeNumber && !state.storeName) return;
   syncStateFromForm();
-  await flushSave();
-  const hist = await getHistory();
-  hist.unshift({...state, archivedAt:Date.now()});
-  while(hist.length > 10) hist.pop();
-  await setHistory(hist);
+  // Try to save current first, but don't fail the archive if save fails (e.g. quota issues)
+  try { await flushSave(); } catch(e){ console.warn('flushSave failed during archive', e); }
+  try {
+    const hist = await getHistory();
+    hist.unshift({...state, archivedAt:Date.now()});
+    // Cap at 5 surveys (down from 10) - each can be 30+ MB with photos
+    while(hist.length > 5) hist.pop();
+    await setHistory(hist);
+  } catch(e){
+    console.error('Archive failed (possibly out of storage):', e);
+    toast('Could not archive current survey — storage may be full. Use the storage manager to clean up.','error');
+    throw e; // let caller know
+  }
 }
 
 async function startNew(){
