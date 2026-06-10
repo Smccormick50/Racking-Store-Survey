@@ -3336,15 +3336,37 @@ function aggregatePartsForPDF(findings){
 }
 
 // ===== HELPER: Render the body of the Complete Survey PDF =====
-// Walks every checklist section + outside structure + free-form + global ref photos.
-// For each item:
-//   - Status OK / N/A / unmarked  -> compact one-line row (label + colored status pill on right)
-//   - Status Needs Work / Issue   -> full expanded block (green header, notes, photos, parts)
-// Returns the final y position.
+// Matches the live app's visual aesthetic:
+//   - Slim section headers (pill-shaped dark green w/ yellow count badge on right)
+//   - Items as simple white rows with 4 status indicators on the right
+//   - Findings (Needs Work/Issue) get a tinted detail panel below with notes + small photos
+//   - Condition photos appear in a soft-green panel directly under their item (like the UI)
+//   - Reference photos in a soft-yellow panel at the end of each section
+//   - Outside structures get their own dark-green sub-headers
 function renderFullSurveyBody(doc, pageW, pageH, margin, y){
+  // ---- color palette matching the live app ----
+  const C = {
+    green:       [14, 74, 42],
+    greenMid:    [22, 101, 59],
+    yellow:      [245, 209, 22],
+    yellowSoft:  [255, 248, 214],
+    yellowDark:  [217, 184, 0],
+    text:        [40, 40, 40],
+    textMuted:   [110, 110, 110],
+    border:      [228, 224, 215],
+    rowAlt:      [252, 251, 247],
+    okGreen:     [57, 148, 86],
+    warnYellow:  [245, 209, 22],
+    badRed:      [197, 30, 30],
+    naGray:      [150, 150, 150],
+    unmarkedBg:  [230, 230, 230],
+    condBg:      [233, 245, 235],   // soft green for condition photos panel
+    refBg:       [255, 247, 220],   // soft yellow for reference photos panel
+    detailBg:    [255, 252, 235]    // light cream for finding detail panel
+  };
 
-  // ---------- shared drawing helpers ----------
-  const FOOTER_MARGIN = margin + 24; // leave room for footer area
+  const FOOTER_MARGIN = margin + 30;
+  const contentW = pageW - margin*2;
 
   function ensureSpace(needed){
     if(y + needed > pageH - FOOTER_MARGIN){
@@ -3353,349 +3375,432 @@ function renderFullSurveyBody(doc, pageW, pageH, margin, y){
     }
   }
 
-  // Big section banner — dark green w/ yellow stripe + item count summary
-  function drawSectionBanner(title, subtitle, counts){
-    ensureSpace(80);
-    y += 10;
-    const sbH = 42;
-    doc.setFillColor(14,74,42);
-    doc.rect(margin, y, pageW - margin*2, sbH, 'F');
-    doc.setFillColor(245,209,22);
-    doc.rect(margin, y + sbH, pageW - margin*2, 4, 'F');
-    doc.setTextColor(245,209,22);
+  // ---- Pill-shaped section header bar (matches app aesthetic) ----
+  function drawSectionBanner(title, countBadge){
+    ensureSpace(40);
+    y += 6;
+    const bH = 28;
+    // Rounded rect dark green
+    doc.setFillColor(...C.green);
+    doc.roundedRect(margin, y, contentW, bH, 6, 6, 'F');
+    // Yellow under-stripe
+    doc.setFillColor(...C.yellow);
+    doc.rect(margin + 4, y + bH, contentW - 8, 1.5, 'F');
+    // Title
+    doc.setTextColor(255,255,255);
     doc.setFont('helvetica','bold');
-    doc.setFontSize(15);
-    doc.text(title, margin + 14, y + 22);
-    if(subtitle){
-      doc.setTextColor(255,255,255);
-      doc.setFont('helvetica','normal');
-      doc.setFontSize(9);
-      doc.text(subtitle, margin + 14, y + 36);
-    }
-    if(counts){
-      // counts breakdown text on the right
+    doc.setFontSize(12);
+    doc.text(title, margin + 14, y + 18);
+    // Yellow count pill on the right
+    if(countBadge){
       doc.setFont('helvetica','bold');
       doc.setFontSize(9);
-      doc.setTextColor(245,209,22);
-      doc.text(counts, pageW - margin - 14, y + 28, {align:'right'});
+      const pillW = doc.getTextWidth(countBadge) + 18;
+      const pillH = 16;
+      const pillX = pageW - margin - pillW - 10;
+      const pillY = y + (bH - pillH)/2;
+      doc.setFillColor(...C.yellow);
+      doc.roundedRect(pillX, pillY, pillW, pillH, 8, 8, 'F');
+      doc.setTextColor(...C.green);
+      doc.text(countBadge, pillX + pillW/2, pillY + 11, {align:'center'});
     }
-    y += sbH + 4 + 14;
+    y += bH + 8;
   }
 
-  // Status pill colors (matching app)
-  function statusColor(status){
-    switch(status){
-      case 'ok':   return {bg:[57,148,86],   fg:[255,255,255], label:'OK'};
-      case 'warn': return {bg:[245,209,22],  fg:[60,40,0],     label:'NEEDS WORK'};
-      case 'bad':  return {bg:[197,30,30],   fg:[255,255,255], label:'ISSUE'};
-      case 'na':   return {bg:[150,150,150], fg:[255,255,255], label:'N/A'};
-      default:     return {bg:[230,230,230], fg:[100,100,100], label:'NOT MARKED'};
-    }
+  // ---- Status indicator: small colored block on the right ----
+  // Matches the live UI which shows 4 buttons (OK / Warn / Bad / NA) with only the active one filled
+  function drawStatusIndicators(rowY, rowH, status){
+    const cellW = 14;
+    const cellH = 12;
+    const gap = 3;
+    const totalW = cellW * 4 + gap * 3;
+    const startX = pageW - margin - totalW - 6;
+    const cellY = rowY + (rowH - cellH)/2;
+    const states = [
+      { key: 'ok',   bg: C.okGreen,    fg: [255,255,255] },
+      { key: 'warn', bg: C.warnYellow, fg: C.green },
+      { key: 'bad',  bg: C.badRed,     fg: [255,255,255] },
+      { key: 'na',   bg: C.naGray,     fg: [255,255,255] }
+    ];
+    states.forEach((s, i)=>{
+      const x = startX + i * (cellW + gap);
+      const active = status === s.key;
+      if(active){
+        doc.setFillColor(...s.bg);
+        doc.roundedRect(x, cellY, cellW, cellH, 2, 2, 'F');
+      } else {
+        // empty cell with border (matching live UI's unselected look)
+        doc.setFillColor(255,255,255);
+        doc.roundedRect(x, cellY, cellW, cellH, 2, 2, 'F');
+        doc.setDrawColor(...C.border);
+        doc.setLineWidth(0.4);
+        doc.roundedRect(x, cellY, cellW, cellH, 2, 2, 'S');
+      }
+    });
+    return startX; // return where indicators start so label can stop short
   }
 
-  // Compact one-line row for OK / NA / unmarked items
-  function drawCompactRow(label, status, inlineValue){
-    ensureSpace(26);
-    const sc = statusColor(status);
-    // Light background stripe
-    doc.setFillColor(252,251,247);
-    doc.rect(margin, y, pageW - margin*2, 22, 'F');
-    doc.setDrawColor(232,228,218);
+  // ---- Compact item row: label + 4 status indicators on right ----
+  // Matches the live UI exactly
+  function drawItemRow(label, status, inlineValue){
+    const rowH = 22;
+    ensureSpace(rowH + 2);
+    // Background — alternating very-subtle stripe
+    doc.setFillColor(255,255,255);
+    doc.rect(margin, y, contentW, rowH, 'F');
+    // Thin bottom border
+    doc.setDrawColor(...C.border);
     doc.setLineWidth(0.4);
-    doc.line(margin, y + 22, pageW - margin, y + 22);
+    doc.line(margin, y + rowH, margin + contentW, y + rowH);
 
-    // Status pill on the right
-    const pillW = Math.max(64, doc.getTextWidth(sc.label) + 16);
-    const pillX = pageW - margin - pillW - 4;
-    doc.setFillColor(sc.bg[0], sc.bg[1], sc.bg[2]);
-    doc.roundedRect(pillX, y + 4, pillW, 14, 3, 3, 'F');
-    doc.setTextColor(sc.fg[0], sc.fg[1], sc.fg[2]);
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(8);
-    doc.text(sc.label, pillX + pillW/2, y + 13, {align:'center'});
+    // Draw status indicators on right, get the X where they start
+    const indicatorStartX = drawStatusIndicators(y, rowH, status);
 
-    // Label on the left (truncated to fit before the pill)
-    doc.setTextColor(30,30,30);
+    // Label on the left
+    doc.setTextColor(...C.text);
     doc.setFont('helvetica','normal');
     doc.setFontSize(10);
-    const labelMaxW = pillX - margin - 10;
-    let displayLabel = label;
-    if(inlineValue){ displayLabel = `${label}  ·  ${inlineValue}`; }
-    // truncate if too long
+    const labelMaxW = indicatorStartX - margin - 16;
+    let displayLabel = inlineValue ? `${label}  ·  ${inlineValue}` : label;
     while(doc.getTextWidth(displayLabel) > labelMaxW && displayLabel.length > 10){
       displayLabel = displayLabel.slice(0, -4) + '...';
     }
-    doc.text(displayLabel, margin + 6, y + 14);
-    y += 22;
+    doc.text(displayLabel, margin + 8, y + 14);
+    y += rowH;
   }
 
-  // Expanded finding block (header bar + label + notes + photos + parts)
-  // showCarpRouted, showParts come from outside since they depend on item type
-  function drawFindingBlock(label, status, notes, photos, opts){
+  // ---- Tinted detail panel below an item (for Needs Work / Issue findings) ----
+  // The panel matches the live UI: tinted background, left accent stripe, notes + photos + parts inside
+  function drawFindingDetail(notes, photos, opts){
     opts = opts || {};
     const carpRouted = opts.carpRouted === true;
     const parts = opts.parts || [];
-    const inlineTag = opts.inlineTag; // {label, value}
-
-    // Precompute height for clean page-break
-    const photoW = (pageW - margin*2 - 20) / 2;
-    const photoH = photoW * 0.75;
-    const labelLines = doc.splitTextToSize(label || '(no label)', pageW - margin*2);
-    const noteLines = notes ? doc.splitTextToSize(notes, pageW - margin*2) : [];
-    const photoRows = photos && photos.length ? Math.ceil(photos.length / 2) : 0;
     const validParts = parts.filter(p => p.rackType && p.description && p.quantity);
-    const partsBlockH = validParts.length ? (16 + validParts.length * 13 + 6) : 0;
-    const neededH = 30 // header
-      + (carpRouted ? 14 : 0)
-      + labelLines.length * 14 + 4
-      + (inlineTag && inlineTag.value ? 18 : 0)
-      + noteLines.length * 12 + (noteLines.length ? 8 : 0)
-      + partsBlockH
-      + photoRows * (photoH + 10)
-      + 22;
-    if(y + Math.min(neededH, pageH - margin*2 - 40) > pageH - FOOTER_MARGIN){
-      doc.addPage(); y = margin;
-    }
 
-    // Status-colored mini header
-    const sc = statusColor(status);
-    doc.setFillColor(22,101,59); // dark green always for header
-    doc.rect(margin, y, pageW - margin*2, 26, 'F');
-    doc.setFillColor(245,209,22);
-    doc.rect(margin, y + 26, pageW - margin*2, 2, 'F');
-    doc.setTextColor(245,209,22);
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(11);
-    const carpTag = carpRouted ? '  >> CARPENTRY' : '';
-    doc.text(`[${sc.label}]${carpTag}`, margin + 10, y + 17);
-    y += 30;
+    // Photo geometry — small (3-column)
+    const photoCols = 4;
+    const photoGap = 6;
+    const innerPadding = 10;
+    const photoW = (contentW - innerPadding*2 - photoGap*(photoCols-1)) / photoCols;
+    const photoH = photoW * 0.75;
 
-    // "ROUTED TO CARPENTRY" tag if applicable
+    // Precompute height
+    const noteLines = notes ? doc.splitTextToSize(notes, contentW - innerPadding*2) : [];
+    const photoRows = photos && photos.length ? Math.ceil(photos.length / photoCols) : 0;
+    const partsH = validParts.length ? (14 + validParts.length * 12 + 6) : 0;
+    const carpH = carpRouted ? 16 : 0;
+    const panelH = innerPadding
+      + carpH
+      + (noteLines.length ? noteLines.length * 11 + 6 : 0)
+      + partsH
+      + (photoRows ? photoRows * (photoH + photoGap) - photoGap + 6 : 0)
+      + innerPadding;
+
+    ensureSpace(panelH + 6);
+
+    // Panel background — light cream tint
+    doc.setFillColor(...C.detailBg);
+    doc.rect(margin, y, contentW, panelH, 'F');
+    // Left accent stripe — color matches status (yellow for warn, red for bad)
+    const accentColor = opts.status === 'bad' ? C.badRed : C.warnYellow;
+    doc.setFillColor(...accentColor);
+    doc.rect(margin, y, 3, panelH, 'F');
+    // Border around panel
+    doc.setDrawColor(...C.border);
+    doc.setLineWidth(0.4);
+    doc.rect(margin, y, contentW, panelH, 'S');
+
+    let py = y + innerPadding;
+
+    // Carpentry routed flag inside the panel
     if(carpRouted){
-      doc.setFillColor(245,209,22);
-      doc.rect(margin, y, 4, 12, 'F');
-      doc.setTextColor(91,68,0);
+      doc.setFillColor(...C.yellow);
+      doc.rect(margin + innerPadding, py - 8, 3, 12, 'F');
+      doc.setTextColor(91, 68, 0);
       doc.setFont('helvetica','bold');
       doc.setFontSize(8);
-      doc.text('ROUTED TO IN-HOUSE CARPENTRY TEAM', margin + 8, y + 9);
-      y += 14;
-    }
-
-    // Label
-    doc.setTextColor(20,20,20);
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(12);
-    doc.text(labelLines, margin, y);
-    y += labelLines.length * 14 + 4;
-
-    // Inline qty tag if present
-    if(inlineTag && inlineTag.value){
-      doc.setFillColor(255,247,200);
-      const tagW = doc.getTextWidth(`${inlineTag.label}: ${inlineTag.value}`) + 16;
-      doc.rect(margin, y - 9, tagW, 18, 'F');
-      doc.setDrawColor(217,184,0);
-      doc.setLineWidth(0.5);
-      doc.rect(margin, y - 9, tagW, 18, 'S');
-      doc.setTextColor(91,68,0);
-      doc.setFont('helvetica','bold');
-      doc.setFontSize(10);
-      doc.text(`${inlineTag.label}: ${inlineTag.value}`, margin + 8, y + 3);
-      y += 18;
+      doc.text('ROUTED TO IN-HOUSE CARPENTRY TEAM', margin + innerPadding + 8, py);
+      py += 14;
     }
 
     // Notes
-    if(notes){
+    if(noteLines.length){
+      doc.setTextColor(...C.text);
       doc.setFont('helvetica','normal');
       doc.setFontSize(10);
-      doc.setTextColor(60,60,60);
-      doc.text(noteLines, margin, y);
-      y += noteLines.length * 12 + 8;
+      doc.text(noteLines, margin + innerPadding, py);
+      py += noteLines.length * 11 + 6;
     }
 
-    // Parts list (only racking findings have parts)
+    // Parts list (racking only)
     if(validParts.length){
-      doc.setFillColor(245,209,22);
-      doc.rect(margin, y, 3, validParts.length * 13 + 8, 'F');
-      doc.setTextColor(14,74,42);
+      doc.setFillColor(...C.yellow);
+      doc.rect(margin + innerPadding, py - 8, 2.5, validParts.length * 12 + 12, 'F');
+      doc.setTextColor(...C.green);
       doc.setFont('helvetica','bold');
+      doc.setFontSize(8);
+      doc.text('PARTS NEEDED', margin + innerPadding + 8, py);
+      py += 12;
       doc.setFontSize(9);
-      doc.text('PARTS NEEDED:', margin + 10, y + 10);
-      y += 13;
-      doc.setFont('helvetica','normal');
-      doc.setFontSize(9);
-      doc.setTextColor(40,40,40);
       validParts.forEach(p => {
         const desc = p.description && p.description.toLowerCase().includes('other / custom') && p.customDescription
           ? p.customDescription
           : p.description;
         doc.setFont('helvetica','bold');
-        doc.setTextColor(14,74,42);
-        doc.text(`${p.quantity}x`, margin + 18, y + 8);
+        doc.setTextColor(...C.green);
+        doc.text(`${p.quantity}x`, margin + innerPadding + 8, py + 8);
         doc.setFont('helvetica','normal');
-        doc.setTextColor(40,40,40);
-        doc.text(`${p.rackType}: ${desc}`, margin + 40, y + 8);
-        y += 13;
+        doc.setTextColor(...C.text);
+        doc.text(`${p.rackType}: ${desc}`, margin + innerPadding + 28, py + 8);
+        py += 12;
       });
-      y += 6;
+      py += 6;
     }
+
+    // Photos in a 4-column grid, small
+    if(photos && photos.length){
+      for(let p = 0; p < photos.length; p++){
+        const col = p % photoCols;
+        if(col === 0 && py + photoH > pageH - FOOTER_MARGIN){
+          doc.addPage();
+          y = margin;
+          py = y + innerPadding;
+        }
+        const x = margin + innerPadding + col * (photoW + photoGap);
+        try { doc.addImage(photos[p].data, 'JPEG', x, py, photoW, photoH); }
+        catch(e){ console.error('photo embed failed', e); }
+        if(col === photoCols - 1 || p === photos.length - 1) py += photoH + photoGap;
+      }
+      py += 4;
+    }
+
+    y += panelH + 6;
+  }
+
+  // ---- Condition photos panel: soft green tint, matches the live UI ----
+  function drawConditionPhotosPanel(photos){
+    if(!photos || !photos.length) return;
+    const photoCols = 5;
+    const photoGap = 6;
+    const innerPadding = 10;
+    const photoW = (contentW - innerPadding*2 - photoGap*(photoCols-1)) / photoCols;
+    const photoH = photoW * 0.75;
+    const photoRows = Math.ceil(photos.length / photoCols);
+    const labelH = 16;
+    const panelH = innerPadding + labelH + photoRows * (photoH + photoGap) - photoGap + innerPadding;
+    ensureSpace(panelH + 4);
+
+    doc.setFillColor(...C.condBg);
+    doc.rect(margin, y, contentW, panelH, 'F');
+    doc.setFillColor(...C.greenMid);
+    doc.rect(margin, y, 3, panelH, 'F');
+    doc.setDrawColor(...C.border);
+    doc.setLineWidth(0.4);
+    doc.rect(margin, y, contentW, panelH, 'S');
+
+    // Label "CONDITION PHOTOS" with count badge on right
+    let py = y + innerPadding;
+    doc.setTextColor(...C.green);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(8.5);
+    doc.text('CONDITION PHOTOS', margin + innerPadding + 4, py + 4);
+    // Count badge
+    const cb = String(photos.length);
+    const cbW = doc.getTextWidth(cb) + 12;
+    const cbX = pageW - margin - cbW - 10;
+    doc.setFillColor(...C.green);
+    doc.roundedRect(cbX, py - 2, cbW, 13, 6, 6, 'F');
+    doc.setTextColor(...C.yellow);
+    doc.setFontSize(8);
+    doc.text(cb, cbX + cbW/2, py + 7, {align:'center'});
+    py += labelH;
 
     // Photos
-    if(photos && photos.length){
-      for(let p=0; p<photos.length; p++){
-        const col = p % 2;
-        if(col === 0 && y + photoH > pageH - FOOTER_MARGIN){ doc.addPage(); y = margin; }
-        const x = margin + col * (photoW + 20);
-        try { doc.addImage(photos[p].data, 'JPEG', x, y, photoW, photoH); }
-        catch(e){ console.error('photo embed failed', e); }
-        if(col === 1 || p === photos.length - 1) y += photoH + 10;
+    for(let p = 0; p < photos.length; p++){
+      const col = p % photoCols;
+      if(col === 0 && py + photoH > pageH - FOOTER_MARGIN){
+        doc.addPage();
+        y = margin;
+        py = y + innerPadding;
+        // Redraw a tiny continuation marker
       }
+      const x = margin + innerPadding + col * (photoW + photoGap);
+      try { doc.addImage(photos[p].data, 'JPEG', x, py, photoW, photoH); }
+      catch(e){ console.error('cond photo embed failed', e); }
+      if(col === photoCols - 1 || p === photos.length - 1) py += photoH + photoGap;
     }
 
-    y += 12;
-    doc.setDrawColor(220,220,220);
-    doc.line(margin, y, pageW - margin, y);
-    y += 12;
+    y += panelH + 4;
   }
 
-  // Reference photo strip for a section
-  function drawReferencePhotos(photos, label){
+  // ---- Reference photos panel: soft yellow tint, matches the live UI ----
+  function drawReferencePhotosPanel(photos, contextLabel){
     if(!photos || !photos.length) return;
-    ensureSpace(60);
-    doc.setFillColor(255,247,200);
-    doc.rect(margin, y, pageW - margin*2, 18, 'F');
-    doc.setTextColor(91,68,0);
-    doc.setFont('helvetica','bold');
-    doc.setFontSize(9);
-    doc.text(`REFERENCE PHOTOS — ${label}  ·  ${photos.length}`, margin + 8, y + 12);
-    y += 24;
-
-    const photoW = (pageW - margin*2 - 40) / 3;
+    const photoCols = 5;
+    const photoGap = 6;
+    const innerPadding = 10;
+    const photoW = (contentW - innerPadding*2 - photoGap*(photoCols-1)) / photoCols;
     const photoH = photoW * 0.75;
-    for(let p=0; p<photos.length; p++){
-      const col = p % 3;
-      if(col === 0 && y + photoH + 20 > pageH - FOOTER_MARGIN){ doc.addPage(); y = margin; }
-      const x = margin + col * (photoW + 20);
-      try { doc.addImage(photos[p].data, 'JPEG', x, y, photoW, photoH); }
-      catch(e){ console.error('ref photo embed failed', e); }
-      // caption if any
-      if(photos[p].caption){
-        doc.setTextColor(120,115,100);
-        doc.setFont('helvetica','italic');
-        doc.setFontSize(8);
-        const capLines = doc.splitTextToSize(photos[p].caption, photoW);
-        doc.text(capLines[0] || '', x, y + photoH + 8);
+    const photoRows = Math.ceil(photos.length / photoCols);
+    const labelH = 16;
+    // Reserve space for captions under each photo row
+    const captionH = 12;
+    const panelH = innerPadding + labelH + photoRows * (photoH + captionH + photoGap) - photoGap + innerPadding;
+    ensureSpace(panelH + 4);
+
+    doc.setFillColor(...C.refBg);
+    doc.rect(margin, y, contentW, panelH, 'F');
+    doc.setFillColor(...C.yellowDark);
+    doc.rect(margin, y, 3, panelH, 'F');
+    doc.setDrawColor(...C.yellowDark);
+    doc.setLineWidth(0.4);
+    doc.rect(margin, y, contentW, panelH, 'S');
+
+    let py = y + innerPadding;
+    doc.setTextColor(91, 68, 0);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(8.5);
+    doc.text('REFERENCE PHOTOS', margin + innerPadding + 4, py + 4);
+    // Count badge
+    const cb = String(photos.length);
+    const cbW = doc.getTextWidth(cb) + 12;
+    const cbX = pageW - margin - cbW - 10;
+    doc.setFillColor(...C.green);
+    doc.roundedRect(cbX, py - 2, cbW, 13, 6, 6, 'F');
+    doc.setTextColor(...C.yellow);
+    doc.setFontSize(8);
+    doc.text(cb, cbX + cbW/2, py + 7, {align:'center'});
+    py += labelH;
+
+    // Photos with captions underneath
+    for(let p = 0; p < photos.length; p++){
+      const col = p % photoCols;
+      if(col === 0 && py + photoH + captionH > pageH - FOOTER_MARGIN){
+        doc.addPage();
+        y = margin;
+        py = y + innerPadding;
       }
-      if(col === 2 || p === photos.length - 1) y += photoH + 18;
+      const x = margin + innerPadding + col * (photoW + photoGap);
+      try { doc.addImage(photos[p].data, 'JPEG', x, py, photoW, photoH); }
+      catch(e){ console.error('ref photo embed failed', e); }
+      // Caption underneath
+      if(photos[p].caption){
+        doc.setTextColor(120, 115, 100);
+        doc.setFont('helvetica','italic');
+        doc.setFontSize(7);
+        const capLines = doc.splitTextToSize(photos[p].caption, photoW);
+        doc.text(capLines[0] || '', x, py + photoH + 8);
+      }
+      if(col === photoCols - 1 || p === photos.length - 1) py += photoH + captionH + photoGap;
     }
-    y += 10;
+
+    y += panelH + 4;
   }
 
-  // Decide if an item is a "finding" (gets expanded block) or compact row
-  function isFinding(status){
-    return status === 'warn' || status === 'bad';
+  // ---- Dark-green sub-section header (for outside structures) ----
+  function drawSubHeader(text){
+    ensureSpace(28);
+    y += 4;
+    const bH = 22;
+    doc.setFillColor(...C.greenMid);
+    doc.roundedRect(margin, y, contentW, bH, 4, 4, 'F');
+    doc.setTextColor(...C.yellow);
+    doc.setFont('helvetica','bold');
+    doc.setFontSize(11);
+    doc.text(text, margin + 12, y + 15);
+    y += bH + 6;
   }
 
-  // Render a single item — automatically picks compact vs expanded based on status
-  // checklistData = {status, notes, photos, parts, carpentry, partsHidden, locationDetail?, quantity?}
+  // ---- Render a single item — handles status, condition photos, finding detail panel ----
   function renderItem(itemDef, checklistData, opts){
     opts = opts || {};
     const data = checklistData || {};
     const status = data.status || '';
-    // Inline value (qty for U/X frame, locationDetail for Cut Shed)
-    let inlineTag = null;
+    const isFinding = (status === 'warn' || status === 'bad');
+
+    // Inline tag (qty / location)
+    let inlineValue = null;
     if(itemDef.inlineInput){
       const cfg = itemDef.inlineInput;
       const val = data[cfg.field];
       if(val !== undefined && val !== '' && val !== null){
-        inlineTag = { label: cfg.label || cfg.field, value: String(val) };
+        inlineValue = `${cfg.label || cfg.field}: ${val}`;
       }
     }
-    if(isFinding(status)){
-      // Full expanded block
-      drawFindingBlock(
-        itemDef.label,
-        status,
+
+    // Draw the compact row (used for ALL items, regardless of status)
+    drawItemRow(itemDef.label, status, inlineValue);
+
+    // If this item is a finding, expand the detail panel below the row
+    if(isFinding){
+      drawFindingDetail(
         data.notes || '',
         data.photos || [],
         {
+          status: status,
           carpRouted: opts.allowCarpentryFlag !== false && data.carpentry === true,
-          parts: (data.partsHidden ? [] : (data.parts || [])),
-          inlineTag: inlineTag
+          parts: (data.partsHidden ? [] : (data.parts || []))
         }
       );
-    } else {
-      // Compact one-line row
-      drawCompactRow(itemDef.label, status, inlineTag ? `${inlineTag.label}: ${inlineTag.value}` : null);
+    }
+
+    // Condition photos panel (signage, U/X-frame items) — always shown if applicable, regardless of status
+    const wantsCondPhoto = itemDef.alwaysPhoto === true ||
+      (itemDef.photoIfQty === true && parseInt(data[itemDef.inlineInput?.field || 'quantity'], 10) > 0);
+    if(wantsCondPhoto && !isFinding){
+      // For findings, photos went into the detail panel above. For non-findings, show condition photos panel.
+      if(data.photos && data.photos.length){
+        drawConditionPhotosPanel(data.photos);
+      }
     }
   }
 
   // ---------- 1. CHECKLIST SECTIONS ----------
   const checklist = currentChecklist();
   Object.entries(checklist).forEach(([sectionName, sectionDef])=>{
-    if(sectionDef.skipped) return; // skip section
+    if(sectionDef.skipped) return;
     const items = sectionDef.items || [];
-    if(!items.length && !(state.refPhotos[sectionName] || []).length) return;
+    const refPhotos = state.refPhotos[sectionName] || [];
+    if(!items.length && !refPhotos.length) return;
 
-    // Compute summary counts for the section
-    let cOk=0, cWarn=0, cBad=0, cNa=0, cBlank=0;
+    // Compute section badge: "X / Y" matching live UI
+    let done = 0;
     items.forEach(it => {
       const s = (state.checklist[it.id] || {}).status || '';
-      if(s === 'ok') cOk++;
-      else if(s === 'warn') cWarn++;
-      else if(s === 'bad') cBad++;
-      else if(s === 'na') cNa++;
-      else cBlank++;
+      if(s) done++;
     });
-    const summaryParts = [];
-    if(cOk) summaryParts.push(`${cOk} OK`);
-    if(cWarn) summaryParts.push(`${cWarn} NEEDS WORK`);
-    if(cBad) summaryParts.push(`${cBad} ISSUE`);
-    if(cNa) summaryParts.push(`${cNa} N/A`);
-    if(cBlank) summaryParts.push(`${cBlank} UNMARKED`);
-    const summary = summaryParts.length ? summaryParts.join('  ·  ') : `${items.length} items`;
+    const badge = `${done} / ${items.length}`;
 
-    drawSectionBanner(sectionName.toUpperCase(), null, summary);
+    drawSectionBanner(sectionName, badge);
 
-    // Render each item in template order
     items.forEach(itemDef => {
       const data = state.checklist[itemDef.id];
       renderItem(itemDef, data, {allowCarpentryFlag:true});
     });
 
-    // Section reference photos at the end
-    const refPhotos = state.refPhotos[sectionName] || [];
     if(refPhotos.length){
-      y += 4;
-      drawReferencePhotos(refPhotos, sectionName);
+      drawReferencePhotosPanel(refPhotos, sectionName);
     }
-
-    y += 8;
+    y += 6;
   });
 
   // ---------- 2. OUTSIDE STRUCTURES ----------
   if((state.structures || []).length){
-    drawSectionBanner('OUTSIDE STRUCTURES', `${state.structures.length} structure${state.structures.length===1?'':'s'}`, null);
+    drawSectionBanner('Outside Structures', `${state.structures.length}`);
     state.structures.forEach(s => {
       const items = structItems(s);
-      // Sub-section header for this structure
-      ensureSpace(40);
-      doc.setFillColor(22,101,59);
-      doc.rect(margin, y, pageW - margin*2, 24, 'F');
-      doc.setTextColor(245,209,22);
-      doc.setFont('helvetica','bold');
-      doc.setFontSize(12);
-      doc.text(`${s.name}  ·  ${s.type}`, margin + 10, y + 16);
-      y += 28;
-
+      let done = 0;
+      items.forEach(it => {
+        const st = ((s.checklist || {})[it.id] || {}).status || '';
+        if(st) done++;
+      });
+      drawSubHeader(`${s.name}  ·  ${s.type}  ·  ${done} / ${items.length}`);
       items.forEach(itemDef => {
         const data = (s.checklist || {})[itemDef.id];
-        renderItem(itemDef, data, {allowCarpentryFlag:false}); // structures don't route to carpentry
+        renderItem(itemDef, data, {allowCarpentryFlag:false});
       });
-
-      // Structure reference photos
       if(s.refPhotos && s.refPhotos.length){
-        y += 4;
-        drawReferencePhotos(s.refPhotos, s.name);
+        drawReferencePhotosPanel(s.refPhotos, s.name);
       }
       y += 6;
     });
@@ -3703,17 +3808,19 @@ function renderFullSurveyBody(doc, pageW, pageH, margin, y){
 
   // ---------- 3. FREE-FORM FINDINGS ----------
   if((state.freeForm || []).length){
-    drawSectionBanner('FREE-FORM FINDINGS', 'Items added during review', `${state.freeForm.length} item${state.freeForm.length===1?'':'s'}`);
+    drawSectionBanner('Free-Form Findings', `${state.freeForm.length}`);
     state.freeForm.forEach(f => {
-      // Free-form items are always findings (Needs Work-like)
-      const label = (f.description || '').split('\n')[0] || 'Untitled finding';
-      const notes = f.description && f.description !== label ? f.description : '';
-      drawFindingBlock(
-        `${f.location || '(no location)'} — ${label}`,
-        'warn',
+      const label = (f.description || '').split('\n')[0] || 'Untitled';
+      const fullDesc = f.description || '';
+      const notes = fullDesc !== label ? fullDesc : '';
+      // Treat free-form as a finding by default
+      const itemLabel = `${f.location || 'Untitled location'} — ${label}`;
+      drawItemRow(itemLabel, 'warn', null);
+      drawFindingDetail(
         notes,
         f.photos || [],
         {
+          status: 'warn',
           carpRouted: f.kind !== 'racking' && f.carpentry === true,
           parts: (f.kind === 'racking' && !f.partsHidden) ? (f.parts || []) : []
         }
@@ -3721,12 +3828,9 @@ function renderFullSurveyBody(doc, pageW, pageH, margin, y){
     });
   }
 
-  // ---------- 4. GLOBAL REFERENCE PHOTOS ----------
-  const globalRefs = state.refPhotos['_global'] || [];
-  if(globalRefs.length){
-    drawSectionBanner('GENERAL REFERENCE PHOTOS', 'Not tied to any specific section', `${globalRefs.length} photo${globalRefs.length===1?'':'s'}`);
-    drawReferencePhotos(globalRefs, 'General');
-  }
+  // Note: Global Reference Photos (the ones on the Photos tab not tied to any section)
+  // are NOT included in the Complete Survey PDF. They live in the photo ZIP under
+  // "Reference / General" instead. This keeps the PDF focused on inspection content.
 
   return y;
 }
