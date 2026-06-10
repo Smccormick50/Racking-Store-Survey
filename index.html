@@ -1790,32 +1790,46 @@ async function openPhotoModalFromImg(imgEl){
 }
 
 // ============= PRE-RESOLVE FOR PDF/ZIP =============
-// Walk every photo in a survey and ensure each one is loaded into the in-memory cache.
+// Walk every photo in a survey and ensure each one is loaded for synchronous access.
 // PDFs are generated synchronously, so we must pre-load all data before generation starts.
-// For ZIPs the same applies — we want all data in memory before constructing the archive.
+// IMPORTANT: returns a dedicated Map (not the LRU cache) because a survey can have more
+// than PHOTO_CACHE_MAX photos. If we used the LRU cache, photos added later would evict
+// photos added earlier, and PDF generation would find the early ones missing.
 async function preResolveAllPhotos(survey){
-  if(!survey) return;
+  const map = new Map();
+  if(!survey) return map;
   const ids = new Set();
   collectPhotoIds(survey).forEach(id => ids.add(id));
-  // Load any not already cached. Note: collectPhotoIds is defined later in the file but
-  // hoisted via function declaration, so it's available here.
-  const toLoad = Array.from(ids).filter(id => !_photoCache.has(id));
-  for(const id of toLoad){
+  for(const id of ids){
+    // If it's in the LRU cache, copy it over (avoids an IDB read)
+    if(_photoCache.has(id)){
+      map.set(id, _photoCache.get(id));
+      continue;
+    }
     try {
       const data = await photoStore.getItem(id);
-      if(data) _photoCacheSet(id, data);
+      if(data) map.set(id, data);
     } catch(e){
       console.warn('Failed to pre-resolve photo', id, e);
     }
   }
+  return map;
 }
 
+// Module-level "current batch" map. Set before a PDF/ZIP generation, cleared after.
+// photoDataFor consults this first before falling back to the LRU cache.
+// This bypasses the 200-photo cache size limit during batch operations.
+let _currentBatchPhotoMap = null;
+
 // Sync resolver for use during PDF/ZIP generation. Returns the data URL or null.
-// Assumes preResolveAllPhotos has already been called.
 function photoDataFor(photoEntry){
   if(!photoEntry) return null;
   if(photoEntry.data) return photoEntry.data;        // legacy inline
-  if(photoEntry.id && _photoCache.has(photoEntry.id)) return _photoCache.get(photoEntry.id);
+  if(!photoEntry.id) return null;
+  if(_currentBatchPhotoMap && _currentBatchPhotoMap.has(photoEntry.id)){
+    return _currentBatchPhotoMap.get(photoEntry.id);
+  }
+  if(_photoCache.has(photoEntry.id)) return _photoCache.get(photoEntry.id);
   return null;
 }
 
@@ -4250,11 +4264,12 @@ async function generatePDF(kind, opts){
     toast('Fill in store number & name first','error'); goTo('store'); return;
   }
 
-  // Pre-resolve every photo referenced by the current survey into the in-memory cache.
-  // PDFs are generated synchronously inside jsPDF, so we can't do async lookups during draw.
-  // This pulls all photo blobs out of IndexedDB up front so doc.addImage() can read them
-  // synchronously via photoDataFor() during PDF generation.
-  await preResolveAllPhotos(state);
+  // Pre-resolve every photo referenced by the current survey. PDFs are generated
+  // synchronously inside jsPDF, so we can't do async lookups during draw.
+  // We use a dedicated batch map (not the LRU cache) because a survey can have
+  // more than 200 photos — the LRU would evict early photos before we finished using them.
+  _currentBatchPhotoMap = await preResolveAllPhotos(state);
+  try {
 
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'pt', format:'letter'});
@@ -4767,6 +4782,10 @@ async function generatePDF(kind, opts){
   }
   doc.save(filename);
   toast(`${filename} downloaded`);
+  } finally {
+    // Release the batch photo map so it doesn't pin large memory after the PDF finishes
+    _currentBatchPhotoMap = null;
+  }
 }
 
 // ============= PHOTO ZIP =============
@@ -4779,7 +4798,8 @@ async function downloadPhotoZip(opts){
   }
 
   // Pre-resolve all photos so synchronous .data lookups work during ZIP build
-  await preResolveAllPhotos(state);
+  _currentBatchPhotoMap = await preResolveAllPhotos(state);
+  try {
 
   const zip = new JSZip();
   let count = 0;
@@ -4840,6 +4860,9 @@ async function downloadPhotoZip(opts){
   }
   toast(`Building zip with ${count} photos...`);
   saveAs(blob, filename);
+  } finally {
+    _currentBatchPhotoMap = null;
+  }
 }
 
 // ============= COMPLETE SURVEY (Email all 4 files) =============
@@ -5004,7 +5027,8 @@ async function saveSurveyFile(){
     toast('Fill in store number & name first','error'); goTo('store'); return;
   }
   // Pre-resolve all photos so we can inline their data into the JSON
-  await preResolveAllPhotos(state);
+  _currentBatchPhotoMap = await preResolveAllPhotos(state);
+  try {
   // Deep clone state then walk it, replacing each {id, name} photo with {name, data}
   // so the file is self-contained and portable across devices.
   const portable = JSON.parse(JSON.stringify(state));
@@ -5051,6 +5075,9 @@ async function saveSurveyFile(){
   const filename = `${state.storeNumber}_${state.storeName}_survey_${state.surveyDate}.json`.replace(/\s+/g,'_');
   saveAs(blob, filename);
   toast(`Saved (${sizeMB} MB)`);
+  } finally {
+    _currentBatchPhotoMap = null;
+  }
 }
 
 function loadSurveyFile(file){
