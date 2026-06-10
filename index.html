@@ -4275,13 +4275,33 @@ async function generatePDF(kind, opts){
       const img = new Image();
       await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src = _storefrontData; });
       const bannerH = 210;
+      // Pre-crop the photo to the banner's aspect ratio using a canvas, so the image
+      // we add to the PDF is exactly bannerW × bannerH. This prevents the photo from
+      // overflowing below the banner (which was happening with portrait photos —
+      // they were being scaled up to fill the width and extending far below the banner,
+      // hiding the text that came after).
+      const bannerW = pageW;
       const imgRatio = img.width / img.height;
-      const targetRatio = pageW / bannerH;
-      let drawW, drawH;
-      if(imgRatio > targetRatio){ drawH = bannerH; drawW = bannerH * imgRatio; }
-      else { drawW = pageW; drawH = pageW / imgRatio; }
-      const offX = (pageW - drawW)/2, offY = (bannerH - drawH)/2;
-      doc.addImage(_storefrontData,'JPEG',offX,offY,drawW,drawH);
+      const targetRatio = bannerW / bannerH;
+      let srcX = 0, srcY = 0, srcW = img.width, srcH = img.height;
+      if(imgRatio > targetRatio){
+        // Image is wider than target: crop the sides
+        srcW = img.height * targetRatio;
+        srcX = (img.width - srcW) / 2;
+      } else {
+        // Image is taller than target: crop top and bottom
+        srcH = img.width / targetRatio;
+        srcY = (img.height - srcH) / 2;
+      }
+      const cropCanvas = document.createElement('canvas');
+      // Render at 2x target size for sharpness (still fits within ~2-3 MB)
+      const renderScale = 2;
+      cropCanvas.width = Math.round(bannerW * renderScale);
+      cropCanvas.height = Math.round(bannerH * renderScale);
+      const cctx = cropCanvas.getContext('2d');
+      cctx.drawImage(img, srcX, srcY, srcW, srcH, 0, 0, cropCanvas.width, cropCanvas.height);
+      const croppedData = cropCanvas.toDataURL('image/jpeg', 0.85);
+      doc.addImage(croppedData, 'JPEG', 0, 0, bannerW, bannerH);
 
       // Dark green overlay band at the bottom of the photo for text legibility
       const overlayH = 82;
@@ -4298,6 +4318,11 @@ async function generatePDF(kind, opts){
       // Yellow stripe under banner
       doc.setFillColor(245,209,22);
       doc.rect(0, bannerH, pageW, 6, 'F');
+
+      // White fill below the yellow stripe — defensive mask for any rendering artifacts
+      // and guarantees the text below the banner sits on a clean white background.
+      doc.setFillColor(255,255,255);
+      doc.rect(0, bannerH + 6, pageW, pageH - (bannerH + 6), 'F');
 
       // Badge on the overlay band (left side, photo stays visible above)
       const badgeY = bannerH - overlayH + 14;
@@ -4320,6 +4345,7 @@ async function generatePDF(kind, opts){
       y = bannerH + 38;
     } catch(e){
       console.error('storefront banner failed', e);
+      try { toast('Storefront photo couldn\'t render — using simple header','error'); } catch(_){}
       drawSimpleHeader();
       y = 130;
     }
@@ -4371,9 +4397,9 @@ async function generatePDF(kind, opts){
     doc.text(`${dateStr}  ·  ${state.surveyorName||'—'}`, titleX, 88);
   }
 
-  doc.setTextColor(120,120,120);
+  doc.setTextColor(60,60,60);
   doc.setFont('helvetica','bold');
-  doc.setFontSize(9);
+  doc.setFontSize(10);
   if(kind === 'full'){
     // Walk all checklist + structure items to count totals across the whole survey
     let totOk=0, totWarn=0, totBad=0, totNa=0, totBlank=0, totItems=0;
