@@ -1541,12 +1541,200 @@ const SAVE_KEY = "mccoys_inspection_current_v2";
 const HIST_KEY = 'mccoys_inspection_history_v2';
 
 // Configure localforage to use IndexedDB primarily (with localStorage fallback)
+// This is the SURVEYS store — keeps the skeleton (text, statuses, photo IDs) only
 localforage.config({
   name: 'mccoys-inspection',
   storeName: 'surveys',
   description: 'McCoy\'s Building Supply Store Inspection data',
   driver: [localforage.INDEXEDDB, localforage.WEBSQL, localforage.LOCALSTORAGE]
 });
+
+// ============= PHASE 1: PHOTO STORAGE LAYER =============
+// Separate IndexedDB store for photo binary data. Photos are keyed by ID (e.g. "ph_a8f3").
+// The survey object only stores photo IDs; image bytes live here.
+// Why: a 300-photo survey is 30+ MB. Loading all that into memory crashes the browser.
+// With photos in a separate store, the survey skeleton stays in kilobytes, and photos
+// are loaded only when needed for display, then released.
+//
+// NOTE: Phase 1 builds the infrastructure but doesn't WIRE IT IN yet. The existing
+// code path still embeds photos inline in `state`. Phase 2 will switch over.
+const photoStore = localforage.createInstance({
+  name: 'mccoys-inspection',
+  storeName: 'photos',
+  description: 'Individual photo blobs, keyed by photo ID'
+});
+
+// In-memory cache: keyed by photo ID, value is the data URL.
+// We cache photos we've loaded recently to avoid hitting IndexedDB repeatedly when scrolling.
+// Cleared periodically and on memory pressure to avoid running out of RAM.
+const _photoCache = new Map();
+const PHOTO_CACHE_MAX = 200; // keep at most ~200 photos in memory (~20-25 MB)
+
+function _photoIdNew(){
+  // Random photo ID — short enough to be efficient, long enough to never collide
+  return 'ph_' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4);
+}
+
+// Save a photo (data URL string) to the photo store. Returns the new photo ID.
+async function savePhotoBlob(dataUrl, name){
+  const id = _photoIdNew();
+  await photoStore.setItem(id, dataUrl);
+  // Cache it immediately so the next render hits the cache, not IDB
+  _photoCacheSet(id, dataUrl);
+  return id;
+}
+
+// Get a photo's data URL by ID. Returns null if not found.
+async function getPhotoBlob(id){
+  if(!id) return null;
+  if(_photoCache.has(id)) return _photoCache.get(id);
+  try {
+    const data = await photoStore.getItem(id);
+    if(data) _photoCacheSet(id, data);
+    return data;
+  } catch(e){
+    console.error('Failed to read photo', id, e);
+    return null;
+  }
+}
+
+// Delete a photo by ID
+async function deletePhotoBlob(id){
+  if(!id) return;
+  _photoCache.delete(id);
+  try { await photoStore.removeItem(id); } catch(e){ console.error('photo delete failed', id, e); }
+}
+
+// Get all photo IDs currently in the store (for orphan cleanup)
+async function listAllPhotoIds(){
+  try { return await photoStore.keys(); } catch(e){ return []; }
+}
+
+// Cache management: add to cache, evicting oldest when over the limit
+function _photoCacheSet(id, data){
+  // If already in cache, refresh its position by removing & re-adding (Map preserves insertion order)
+  if(_photoCache.has(id)) _photoCache.delete(id);
+  _photoCache.set(id, data);
+  // Evict oldest if over limit
+  while(_photoCache.size > PHOTO_CACHE_MAX){
+    const firstKey = _photoCache.keys().next().value;
+    if(firstKey == null) break;
+    _photoCache.delete(firstKey);
+  }
+}
+
+// Clear the in-memory photo cache (useful before memory-heavy operations like PDF generation)
+function clearPhotoCache(){
+  _photoCache.clear();
+}
+
+// Estimate total bytes used by photos in IndexedDB
+// Walks the store keys, can be expensive for very large collections, so use sparingly
+async function estimatePhotoStorageSize(){
+  try {
+    const keys = await photoStore.keys();
+    let total = 0;
+    // Sample 20 photos to get an average, then extrapolate — full walk is too slow
+    const sample = keys.slice(0, 20);
+    for(const k of sample){
+      const data = await photoStore.getItem(k);
+      if(data) total += data.length;
+    }
+    if(sample.length === 0) return 0;
+    const avgSize = total / sample.length;
+    return Math.round(avgSize * keys.length);
+  } catch(e){ return 0; }
+}
+
+// ============= MIGRATION HELPER =============
+// Walk a survey object and convert inline photos {name, data} -> {id, name} stored in photoStore.
+// Used when loading a survey that was saved in the OLD inline format (from before Phase 2).
+// Returns true if any migration happened.
+async function migrateSurveyPhotosToStore(survey){
+  if(!survey) return false;
+  let migrated = false;
+
+  // Helper to migrate one photo array in place
+  async function migrateArray(arr){
+    if(!Array.isArray(arr)) return;
+    for(let i = 0; i < arr.length; i++){
+      const p = arr[i];
+      if(!p) continue;
+      // Already migrated? (has id, no data)
+      if(p.id && !p.data) continue;
+      // Has inline data? Move it to the store
+      if(p.data){
+        try {
+          const id = await savePhotoBlob(p.data, p.name || '');
+          arr[i] = { id, name: p.name || '', caption: p.caption || '' };
+          migrated = true;
+        } catch(e){
+          console.error('Failed to migrate photo, keeping inline', e);
+        }
+      }
+    }
+  }
+
+  // 1. Checklist item photos
+  if(survey.checklist){
+    for(const itemId of Object.keys(survey.checklist)){
+      await migrateArray(survey.checklist[itemId].photos);
+    }
+  }
+  // 2. Structure item photos + structure reference photos
+  if(Array.isArray(survey.structures)){
+    for(const s of survey.structures){
+      if(s.checklist){
+        for(const itemId of Object.keys(s.checklist)){
+          await migrateArray(s.checklist[itemId].photos);
+        }
+      }
+      await migrateArray(s.refPhotos);
+    }
+  }
+  // 3. Free-form finding photos
+  if(Array.isArray(survey.freeForm)){
+    for(const f of survey.freeForm){
+      await migrateArray(f.photos);
+    }
+  }
+  // 4. Reference photos (by section, plus _global)
+  if(survey.refPhotos && typeof survey.refPhotos === 'object'){
+    for(const sectionKey of Object.keys(survey.refPhotos)){
+      await migrateArray(survey.refPhotos[sectionKey]);
+    }
+  }
+  // 5. Storefront photo (lives at survey.storefront = {name, data})
+  if(survey.storefront && survey.storefront.data && !survey.storefront.id){
+    try {
+      const id = await savePhotoBlob(survey.storefront.data, survey.storefront.name || 'storefront');
+      survey.storefront = { id, name: survey.storefront.name || 'storefront' };
+      migrated = true;
+    } catch(e){ console.error('storefront migration failed', e); }
+  }
+
+  return migrated;
+}
+
+// Resolve a single photo entry to its data URL. Handles BOTH formats:
+//   - Old: { name, data } — returns the inline data directly
+//   - New: { id, name }   — looks up from photoStore (async)
+// Returns null if not resolvable.
+async function resolvePhotoData(photoEntry){
+  if(!photoEntry) return null;
+  if(photoEntry.data) return photoEntry.data;     // legacy inline
+  if(photoEntry.id) return await getPhotoBlob(photoEntry.id);
+  return null;
+}
+
+// Sync version that only returns data if the photo is in cache (or inline).
+// Useful for places that can't wait — they should kick off an async load otherwise.
+function resolvePhotoDataSync(photoEntry){
+  if(!photoEntry) return null;
+  if(photoEntry.data) return photoEntry.data;
+  if(photoEntry.id && _photoCache.has(photoEntry.id)) return _photoCache.get(photoEntry.id);
+  return null;
+}
 
 let lastSaveTime = 0;
 let saveDebounceTimer = null;
@@ -1855,10 +2043,12 @@ async function clearAllHistory(){
 }
 
 async function nukeAllStorage(){
-  if(!confirm('ERASE EVERYTHING?\n\nThis deletes:\n• The current survey\n• All archived history\n• All saved data\n\nYou will need to start fresh. This CANNOT be undone.')) return;
+  if(!confirm('ERASE EVERYTHING?\n\nThis deletes:\n• The current survey\n• All archived history\n• All saved data\n• All photos\n\nYou will need to start fresh. This CANNOT be undone.')) return;
   if(!confirm('Are you absolutely sure? This is your last chance to cancel.')) return;
   try {
     await localforage.clear();
+    try { await photoStore.clear(); } catch(e){ console.warn('photo store clear failed', e); }
+    clearPhotoCache();
     // Also remove any legacy localStorage keys
     try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem(HIST_KEY); } catch(e){}
     state = newState();
