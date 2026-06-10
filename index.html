@@ -266,6 +266,8 @@ h3{font-size:18px;font-weight:800;margin:18px 0 12px;color:var(--green);text-tra
 }
 .photo-thumb{position:relative;width:72px;height:72px;border-radius:6px;overflow:hidden;background:#fafaf6;border:1px solid var(--border)}
 .photo-thumb img{width:100%;height:100%;object-fit:cover;cursor:pointer}
+img.photo-loading{background:linear-gradient(90deg,#e8efe8 0%,#d4e4d8 50%,#e8efe8 100%);background-size:200% 100%;animation:photoShimmer 1.2s ease-in-out infinite;min-height:60px}
+@keyframes photoShimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
 .photo-thumb .del{position:absolute;top:3px;right:3px;background:rgba(0,0,0,.78);color:#fff;border:none;width:20px;height:20px;border-radius:50%;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;font-weight:700;line-height:1}
 .photo-add-group{display:flex;flex-direction:column;gap:5px;position:relative;border-radius:8px;transition:background .15s,box-shadow .15s}
 .photo-add-group .photo-drop-hint{display:none;position:absolute;inset:-6px;border:2px dashed var(--green);border-radius:10px;background:rgba(14,74,42,.08);color:var(--green);font-size:12px;font-weight:800;align-items:center;justify-content:center;letter-spacing:.5px;text-transform:uppercase;pointer-events:none;z-index:5;text-align:center;backdrop-filter:blur(1px);-webkit-backdrop-filter:blur(1px)}
@@ -1736,6 +1738,87 @@ function resolvePhotoDataSync(photoEntry){
   return null;
 }
 
+// Build the <img> HTML for a photo entry. Handles BOTH formats transparently.
+//   - If the photo is inline ({data:...}) or already in cache, src is set directly (sync render).
+//   - If the photo is ID-only and NOT in cache, src is left blank and a data-photo-id attribute is set;
+//     hydratePhotoPlaceholders() will fill in the src once the data loads from storage.
+// Optional opts.className for extra CSS classes on the img.
+function photoImgTag(photoEntry, opts){
+  opts = opts || {};
+  const cls = opts.className || '';
+  const cached = resolvePhotoDataSync(photoEntry);
+  if(cached){
+    // Inline or cached — render directly. Use a data-attribute too so the modal click can find the full data.
+    const safeId = photoEntry && photoEntry.id ? photoEntry.id : '';
+    return `<img class="${cls}" src="${cached}" ${safeId ? `data-photo-id="${safeId}"` : ''} onclick="openPhotoModalFromImg(this)">`;
+  }
+  if(photoEntry && photoEntry.id){
+    // Placeholder — will be hydrated async
+    return `<img class="${cls} photo-loading" data-photo-id="${photoEntry.id}" src="" onclick="openPhotoModalFromImg(this)">`;
+  }
+  return '';
+}
+
+// Find every <img data-photo-id="..."> that hasn't loaded yet and fetch its data from the store.
+// Called after any render that may include ID-based photos. Idempotent and safe to call often.
+async function hydratePhotoPlaceholders(root){
+  root = root || document;
+  const imgs = root.querySelectorAll('img[data-photo-id]');
+  for(const img of imgs){
+    if(img.src && img.src.startsWith('data:')) continue; // already loaded
+    const id = img.getAttribute('data-photo-id');
+    if(!id) continue;
+    try {
+      const data = await getPhotoBlob(id);
+      if(data){
+        img.src = data;
+        img.classList.remove('photo-loading');
+      }
+    } catch(e){ console.error('photo hydrate failed', id, e); }
+  }
+}
+
+// Click handler for photo thumbnails - resolves the full data and opens the modal
+async function openPhotoModalFromImg(imgEl){
+  const id = imgEl.getAttribute('data-photo-id');
+  let src = imgEl.src;
+  if(id){
+    const data = await getPhotoBlob(id);
+    if(data) src = data;
+  }
+  openPhotoModal(src);
+}
+
+// ============= PRE-RESOLVE FOR PDF/ZIP =============
+// Walk every photo in a survey and ensure each one is loaded into the in-memory cache.
+// PDFs are generated synchronously, so we must pre-load all data before generation starts.
+// For ZIPs the same applies — we want all data in memory before constructing the archive.
+async function preResolveAllPhotos(survey){
+  if(!survey) return;
+  const ids = new Set();
+  collectPhotoIds(survey).forEach(id => ids.add(id));
+  // Load any not already cached. Note: collectPhotoIds is defined later in the file but
+  // hoisted via function declaration, so it's available here.
+  const toLoad = Array.from(ids).filter(id => !_photoCache.has(id));
+  for(const id of toLoad){
+    try {
+      const data = await photoStore.getItem(id);
+      if(data) _photoCacheSet(id, data);
+    } catch(e){
+      console.warn('Failed to pre-resolve photo', id, e);
+    }
+  }
+}
+
+// Sync resolver for use during PDF/ZIP generation. Returns the data URL or null.
+// Assumes preResolveAllPhotos has already been called.
+function photoDataFor(photoEntry){
+  if(!photoEntry) return null;
+  if(photoEntry.data) return photoEntry.data;        // legacy inline
+  if(photoEntry.id && _photoCache.has(photoEntry.id)) return _photoCache.get(photoEntry.id);
+  return null;
+}
+
 let lastSaveTime = 0;
 let saveDebounceTimer = null;
 let pendingSave = false;
@@ -1805,6 +1888,17 @@ async function load(){
     if(restored){
       state = restored;
       migrate();
+      // Phase 2 migration: if any photos in the loaded survey are still inline-format
+      // ({name, data}), move them out to photoStore. This is a one-time conversion
+      // that runs silently in the background. New surveys start in the new format,
+      // so this only kicks in for surveys saved before Phase 2.
+      try {
+        const migratedAny = await migrateSurveyPhotosToStore(state);
+        if(migratedAny){
+          await localforage.setItem(SAVE_KEY, state);
+          toast('Photo storage upgraded — app is now faster','ok');
+        }
+      } catch(migErr){ console.warn('Photo migration failed:', migErr); }
       syncFormFromState();
       toast('Previous survey restored','ok');
     } else {
@@ -1877,7 +1971,7 @@ function estimateStateSize(obj){
 // Count photos in a survey object
 function countPhotosIn(survey){
   let n = 0;
-  if(survey.storefront && survey.storefront.data) n++;
+  if(survey.storefront && (survey.storefront.data || survey.storefront.id)) n++;
   if(survey.checklist){
     Object.values(survey.checklist).forEach(d => { if(d.photos) n += d.photos.length; });
   }
@@ -2005,7 +2099,65 @@ async function renderStorageManager(){
   `;
 }
 
+// Walk a survey object and return a Set of all photo IDs it references.
+// Used to clean up photo blobs when a survey is deleted.
+function collectPhotoIds(survey){
+  const ids = new Set();
+  if(!survey) return ids;
+  const addArr = arr => {
+    if(!Array.isArray(arr)) return;
+    arr.forEach(p => { if(p && p.id) ids.add(p.id); });
+  };
+  if(survey.storefront && survey.storefront.id) ids.add(survey.storefront.id);
+  if(survey.checklist){
+    Object.values(survey.checklist).forEach(d => addArr(d.photos));
+  }
+  if(Array.isArray(survey.structures)){
+    survey.structures.forEach(s => {
+      if(s.checklist){
+        Object.values(s.checklist).forEach(d => addArr(d.photos));
+      }
+      addArr(s.refPhotos);
+    });
+  }
+  if(Array.isArray(survey.freeForm)){
+    survey.freeForm.forEach(f => addArr(f.photos));
+  }
+  if(survey.refPhotos){
+    Object.values(survey.refPhotos).forEach(arr => addArr(arr));
+  }
+  return ids;
+}
+
+// Delete photo blobs for the IDs that are referenced ONLY by `survey` and not by any
+// currently-live survey (state) or any other history entry. Avoids accidentally deleting
+// a photo that's still referenced elsewhere.
+async function deletePhotosOfSurvey(survey, otherSurveys){
+  const toCheck = collectPhotoIds(survey);
+  if(toCheck.size === 0) return;
+  // Build set of IDs still referenced by something we want to keep
+  const stillReferenced = new Set();
+  if(state && state !== survey){
+    collectPhotoIds(state).forEach(id => stillReferenced.add(id));
+  }
+  (otherSurveys || []).forEach(other => {
+    if(other === survey) return;
+    collectPhotoIds(other).forEach(id => stillReferenced.add(id));
+  });
+  // Delete only the IDs that aren't referenced anywhere else
+  for(const id of toCheck){
+    if(!stillReferenced.has(id)){
+      try { await deletePhotoBlob(id); } catch(e){ /* ignore */ }
+    }
+  }
+}
+
 async function clearCurrentSurvey(){
+  // Clean up photos belonging to the current survey
+  try {
+    const hist = await getHistory();
+    await deletePhotosOfSurvey(state, hist);
+  } catch(e){ console.warn('photo cleanup on clearCurrentSurvey failed', e); }
   state = newState();
   try { await localforage.removeItem(SAVE_KEY); } catch(e){}
   syncFormFromState();
@@ -2020,8 +2172,10 @@ async function deleteHistoryFromManager(idx){
   if(!confirm('Delete this archived survey? Cannot be undone.')) return;
   try {
     const hist = (await getHistory()) || [];
-    hist.splice(idx, 1);
+    const removed = hist.splice(idx, 1)[0];
     await setHistory(hist);
+    // Clean up photos that only this archived survey referenced
+    if(removed) await deletePhotosOfSurvey(removed, hist);
     await renderStorageManager();
     updateStorageGauge();
     toast('Archived survey deleted','ok');
@@ -2033,7 +2187,13 @@ async function deleteHistoryFromManager(idx){
 async function clearAllHistory(){
   if(!confirm('Delete ALL archived surveys? Cannot be undone.\n\nThis will NOT affect your current in-progress survey.')) return;
   try {
+    const hist = (await getHistory()) || [];
     await setHistory([]);
+    // Clean up photos referenced ONLY by the now-deleted archives
+    // (preserve those still referenced by current state)
+    for(const removed of hist){
+      await deletePhotosOfSurvey(removed, []);
+    }
     await renderStorageManager();
     updateStorageGauge();
     toast('All history cleared','ok');
@@ -2235,6 +2395,7 @@ function renderWalk(){
 
   renderStructures();
   updateProgress();
+  hydratePhotoPlaceholders(container);
 }
 
 function renderItem(item, store, sectionKey){
@@ -2293,7 +2454,7 @@ function renderConditionPhotos(item, data){
       <div class="photo-row">
         ${photos.map((p,i)=>`
           <div class="photo-thumb">
-            <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+            ${photoImgTag(p)}
             <button class="del" onclick="deletePhoto('${item.id}',${i})">×</button>
           </div>
         `).join('')}
@@ -2364,7 +2525,7 @@ function renderItemDetail(item){
       <div class="photo-row">
         ${photos.map((p,i)=>`
           <div class="photo-thumb">
-            <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+            ${photoImgTag(p)}
             <button class="del" onclick="deletePhoto('${item.id}',${i})">×</button>
           </div>
         `).join('')}
@@ -2706,6 +2867,7 @@ function updateItemInPlace(itemId){
 
   // Update the section header badge (X / Y) and stats
   updateSectionBadge(sectionName);
+  newNodes.forEach(n => hydratePhotoPlaceholders(n));
 }
 
 function updateStructItemInPlace(structId, itemId){
@@ -2730,6 +2892,7 @@ function updateStructItemInPlace(structId, itemId){
 
   // Update struct card subtitle (count)
   updateStructCount(structId);
+  newNodes.forEach(n => hydratePhotoPlaceholders(n));
 }
 
 function updateSectionBadge(sectionName){
@@ -2827,7 +2990,8 @@ async function addPhoto(id, files){
   if(!state.checklist[id].photos) state.checklist[id].photos = [];
   for(const f of files){
     const data = await resizeImage(f);
-    state.checklist[id].photos.push({name:f.name, data});
+    const photoId = await savePhotoBlob(data, f.name);
+    state.checklist[id].photos.push({ id: photoId, name: f.name });
   }
   save();
   updateItemInPlace(id);
@@ -2839,20 +3003,25 @@ async function addStructPhoto(structId, itemId, files){
   if(!s.checklist[itemId].photos) s.checklist[itemId].photos = [];
   for(const f of files){
     const data = await resizeImage(f);
-    s.checklist[itemId].photos.push({name:f.name, data});
+    const photoId = await savePhotoBlob(data, f.name);
+    s.checklist[itemId].photos.push({ id: photoId, name: f.name });
   }
   save();
   updateStructItemInPlace(structId, itemId);
 }
 
-function deletePhoto(id, idx){
+async function deletePhoto(id, idx){
+  const photo = state.checklist[id].photos[idx];
+  if(photo && photo.id) await deletePhotoBlob(photo.id);
   state.checklist[id].photos.splice(idx,1);
   save();
   updateItemInPlace(id);
 }
 
-function deleteStructPhoto(structId, itemId, idx){
+async function deleteStructPhoto(structId, itemId, idx){
   const s = state.structures.find(x=>x.id===structId);
+  const photo = s.checklist[itemId].photos[idx];
+  if(photo && photo.id) await deletePhotoBlob(photo.id);
   s.checklist[itemId].photos.splice(idx,1);
   save();
   updateStructItemInPlace(structId, itemId);
@@ -2913,14 +3082,22 @@ function resizeBanner(file){
 // ============= STOREFRONT =============
 async function setStorefront(file){
   if(!file) return;
+  // If there's an existing storefront photo with an ID, delete the old blob to avoid orphans
+  if(state.storefront && state.storefront.id){
+    try { await deletePhotoBlob(state.storefront.id); } catch(e){}
+  }
   const data = await resizeBanner(file);
-  state.storefront = { name: file.name, data };
+  const photoId = await savePhotoBlob(data, file.name);
+  state.storefront = { id: photoId, name: file.name };
   save();
   renderStorefront();
 }
 
-function clearStorefront(){
+async function clearStorefront(){
   if(!confirm('Remove storefront photo?')) return;
+  if(state.storefront && state.storefront.id){
+    try { await deletePhotoBlob(state.storefront.id); } catch(e){}
+  }
   state.storefront = null;
   save();
   renderStorefront();
@@ -2929,10 +3106,10 @@ function clearStorefront(){
 function renderStorefront(){
   const area = document.getElementById('storefrontArea');
   if(!area) return;
-  if(state.storefront && state.storefront.data){
+  if(state.storefront && (state.storefront.data || state.storefront.id)){
     area.innerHTML = `
       <div class="storefront-preview">
-        <img src="${state.storefront.data}" onclick="openPhotoModal('${state.storefront.data}')">
+        ${photoImgTag(state.storefront)}
         <div class="storefront-actions">
           <label><i class="ti ti-camera"></i> Camera
             <input type="file" accept="image/*" capture="environment" onchange="setStorefront(this.files[0])">
@@ -2967,6 +3144,7 @@ function renderStorefront(){
       </div>
     `;
   }
+  hydratePhotoPlaceholders(area);
 }
 
 // ============= REFERENCE PHOTOS =============
@@ -2978,7 +3156,8 @@ async function addRefPhoto(sectionKey, files){
     for(const f of files){
       try {
         const data = await resizeImage(f);
-        state.refPhotos[sectionKey].push({name:f.name, data, caption:''});
+        const photoId = await savePhotoBlob(data, f.name);
+        state.refPhotos[sectionKey].push({ id: photoId, name: f.name, caption: '' });
         added++;
       } catch(imgErr){
         console.error('Failed to process photo:', f.name, imgErr);
@@ -2996,8 +3175,10 @@ async function addRefPhoto(sectionKey, files){
   }
 }
 
-function deleteRefPhoto(sectionKey, idx){
+async function deleteRefPhoto(sectionKey, idx){
   if(!confirm('Delete this reference photo?')) return;
+  const photo = state.refPhotos[sectionKey][idx];
+  if(photo && photo.id) await deletePhotoBlob(photo.id);
   state.refPhotos[sectionKey].splice(idx,1);
   save();
   if(sectionKey === '_global') renderGlobalRefPhotos();
@@ -3017,7 +3198,9 @@ function updateRefStripInPlace(key, isStruct){
     if(strip.dataset.sectionKey === key && strip.dataset.isStruct === (isStruct ? '1' : '0')){
       const wrapper = document.createElement('div');
       wrapper.innerHTML = renderRefStrip(key, photos, isStruct);
-      strip.replaceWith(wrapper.firstElementChild);
+      const newEl = wrapper.firstElementChild;
+      strip.replaceWith(newEl);
+      hydratePhotoPlaceholders(newEl);
       return;
     }
   }
@@ -3036,15 +3219,18 @@ async function addStructRefPhoto(structId, files){
   if(!s.refPhotos) s.refPhotos = [];
   for(const f of files){
     const data = await resizeImage(f);
-    s.refPhotos.push({name:f.name, data, caption:''});
+    const photoId = await savePhotoBlob(data, f.name);
+    s.refPhotos.push({ id: photoId, name: f.name, caption: '' });
   }
   save();
   updateRefStripInPlace(structId, true);
 }
 
-function deleteStructRefPhoto(structId, idx){
+async function deleteStructRefPhoto(structId, idx){
   if(!confirm('Delete this reference photo?')) return;
   const s = state.structures.find(x=>x.id===structId);
+  const photo = s.refPhotos[idx];
+  if(photo && photo.id) await deletePhotoBlob(photo.id);
   s.refPhotos.splice(idx,1);
   save();
   updateRefStripInPlace(structId, true);
@@ -3074,7 +3260,7 @@ function renderRefStrip(sectionKey, photos, isStruct){
         ${photos.map((p,i)=>`
           <div class="ref-thumb">
             <div class="photo-thumb">
-              <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+              ${photoImgTag(p)}
               <button class="del" onclick="${delHandler}('${safeKey}',${i})">×</button>
             </div>
             <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="${capHandler}('${safeKey}',${i},this.value)">
@@ -3104,7 +3290,7 @@ function renderGlobalRefPhotos(){
       ${photos.map((p,i)=>`
         <div class="ref-thumb" style="width:140px">
           <div class="photo-thumb" style="width:140px;height:140px">
-            <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+            ${photoImgTag(p)}
             <button class="del" onclick="deleteRefPhoto('_global',${i})">×</button>
           </div>
           <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="setRefCaption('_global',${i},this.value)" style="width:140px">
@@ -3113,6 +3299,7 @@ function renderGlobalRefPhotos(){
       ${renderPhotoButtons("addRefPhoto('_global',this.files)")}
     </div>
   `;
+  hydratePhotoPlaceholders(el);
 }
 
 // ============= STRUCTURES =============
@@ -3212,6 +3399,7 @@ function renderStructures(){
     `;
   }).join('');
   updateProgress();
+  hydratePhotoPlaceholders(document.getElementById('structuresList'));
 }
 
 function renderStructItemRow(s, it){
@@ -3270,7 +3458,7 @@ function renderStructItemDetail(structId, item){
       <div class="photo-row">
         ${photos.map((p,i)=>`
           <div class="photo-thumb">
-            <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+            ${photoImgTag(p)}
             <button class="del" onclick="deleteStructPhoto('${structId}','${item.id}',${i})">×</button>
           </div>
         `).join('')}
@@ -3304,8 +3492,14 @@ function updateFreeForm(id, field, val){
   const f = state.freeForm.find(x=>x.id===id); if(f){ f[field] = val; save(); }
 }
 
-function deleteFreeForm(id){
+async function deleteFreeForm(id){
   if(!confirm('Delete this finding?')) return;
+  const f = state.freeForm.find(x=>x.id===id);
+  if(f && f.photos){
+    for(const p of f.photos){
+      if(p && p.id) await deletePhotoBlob(p.id);
+    }
+  }
   state.freeForm = state.freeForm.filter(x=>x.id!==id);
   save();
   renderReview();
@@ -3313,16 +3507,20 @@ function deleteFreeForm(id){
 
 async function addFreeFormPhoto(id, files){
   const f = state.freeForm.find(x=>x.id===id); if(!f) return;
+  if(!f.photos) f.photos = [];
   for(const file of files){
     const data = await resizeImage(file);
-    f.photos.push({name:file.name, data});
+    const photoId = await savePhotoBlob(data, file.name);
+    f.photos.push({ id: photoId, name: file.name });
   }
   save();
   renderReview();
 }
 
-function deleteFreeFormPhoto(id, idx){
+async function deleteFreeFormPhoto(id, idx){
   const f = state.freeForm.find(x=>x.id===id);
+  const photo = f.photos[idx];
+  if(photo && photo.id) await deletePhotoBlob(photo.id);
   f.photos.splice(idx,1);
   save();
   renderReview();
@@ -3356,7 +3554,7 @@ function renderReview(){
           <div class="photo-row">
             ${(f.photos||[]).map((p,i)=>`
               <div class="photo-thumb">
-                <img src="${p.data}" onclick="openPhotoModal('${p.data}')">
+                ${photoImgTag(p)}
                 <button class="del" onclick="deleteFreeFormPhoto('${f.id}',${i})">×</button>
               </div>
             `).join('')}
@@ -3395,6 +3593,7 @@ function renderReview(){
   document.getElementById('carpentryList').innerHTML = carpentry.length
     ? carpentry.map(renderFinding).join('')
     : '<div class="empty"><i class="ti ti-hammer"></i>No items flagged for carpentry team yet<br><small style="display:block;margin-top:6px">Toggle "Route to Carpentry Team" on any facility issue during the walk.</small></div>';
+  hydratePhotoPlaceholders(document.getElementById('page-review'));
 }
 
 function collectFindings(kind){
@@ -3759,7 +3958,7 @@ function renderFullSurveyBody(doc, pageW, pageH, margin, y){
           py = y + innerPadding;
         }
         const x = margin + innerPadding + col * (photoW + photoGap);
-        try { doc.addImage(photos[p].data, 'JPEG', x, py, photoW, photoH); }
+        try { const _d = photoDataFor(photos[p]); if(_d) doc.addImage(_d, 'JPEG', x, py, photoW, photoH); }
         catch(e){ console.error('photo embed failed', e); }
         if(col === photoCols - 1 || p === photos.length - 1) py += photoH + photoGap;
       }
@@ -3817,7 +4016,7 @@ function renderFullSurveyBody(doc, pageW, pageH, margin, y){
         // Redraw a tiny continuation marker
       }
       const x = margin + innerPadding + col * (photoW + photoGap);
-      try { doc.addImage(photos[p].data, 'JPEG', x, py, photoW, photoH); }
+      try { const _d = photoDataFor(photos[p]); if(_d) doc.addImage(_d, 'JPEG', x, py, photoW, photoH); }
       catch(e){ console.error('cond photo embed failed', e); }
       if(col === photoCols - 1 || p === photos.length - 1) py += photoH + photoGap;
     }
@@ -3873,7 +4072,7 @@ function renderFullSurveyBody(doc, pageW, pageH, margin, y){
         py = y + innerPadding;
       }
       const x = margin + innerPadding + col * (photoW + photoGap);
-      try { doc.addImage(photos[p].data, 'JPEG', x, py, photoW, photoH); }
+      try { const _d = photoDataFor(photos[p]); if(_d) doc.addImage(_d, 'JPEG', x, py, photoW, photoH); }
       catch(e){ console.error('ref photo embed failed', e); }
       // Caption underneath
       if(photos[p].caption){
@@ -4051,6 +4250,12 @@ async function generatePDF(kind, opts){
     toast('Fill in store number & name first','error'); goTo('store'); return;
   }
 
+  // Pre-resolve every photo referenced by the current survey into the in-memory cache.
+  // PDFs are generated synchronously inside jsPDF, so we can't do async lookups during draw.
+  // This pulls all photo blobs out of IndexedDB up front so doc.addImage() can read them
+  // synchronously via photoDataFor() during PDF generation.
+  await preResolveAllPhotos(state);
+
   const { jsPDF } = window.jspdf;
   const doc = new jsPDF({unit:'pt', format:'letter'});
   const pageW = doc.internal.pageSize.getWidth();
@@ -4064,10 +4269,11 @@ async function generatePDF(kind, opts){
     : 'Facility Report';
 
   // ===== COVER HEADER =====
-  if(state.storefront && state.storefront.data){
+  const _storefrontData = photoDataFor(state.storefront);
+  if(state.storefront && _storefrontData){
     try {
       const img = new Image();
-      await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src = state.storefront.data; });
+      await new Promise((res,rej)=>{ img.onload=res; img.onerror=rej; img.src = _storefrontData; });
       const bannerH = 210;
       const imgRatio = img.width / img.height;
       const targetRatio = pageW / bannerH;
@@ -4075,7 +4281,7 @@ async function generatePDF(kind, opts){
       if(imgRatio > targetRatio){ drawH = bannerH; drawW = bannerH * imgRatio; }
       else { drawW = pageW; drawH = pageW / imgRatio; }
       const offX = (pageW - drawW)/2, offY = (bannerH - drawH)/2;
-      doc.addImage(state.storefront.data,'JPEG',offX,offY,drawW,drawH);
+      doc.addImage(_storefrontData,'JPEG',offX,offY,drawW,drawH);
 
       // Dark green overlay band at the bottom of the photo for text legibility
       const overlayH = 82;
@@ -4506,7 +4712,7 @@ async function generatePDF(kind, opts){
         const col = p % 2;
         if(col === 0 && y + photoH > pageH - margin){ doc.addPage(); y = margin; }
         const x = margin + col * (photoW + 20);
-        try { doc.addImage(photos[p].data,'JPEG',x,y,photoW,photoH); }
+        try { const _d = photoDataFor(photos[p]); if(_d) doc.addImage(_d,'JPEG',x,y,photoW,photoH); }
         catch(e){ console.error('photo embed failed', e); }
         if(col === 1 || p === photos.length-1) y += photoH + 10;
       }
@@ -4546,6 +4752,9 @@ async function downloadPhotoZip(opts){
     toast('Fill in store info first','error'); goTo('store'); return;
   }
 
+  // Pre-resolve all photos so synchronous .data lookups work during ZIP build
+  await preResolveAllPhotos(state);
+
   const zip = new JSZip();
   let count = 0;
   const sanitize = s => (s||'').replace(/[^a-zA-Z0-9 _-]/g,'').trim().slice(0,80) || 'misc';
@@ -4557,7 +4766,7 @@ async function downloadPhotoZip(opts){
       let nameBit = (p.name||'photo').replace(/\.(jpg|jpeg|png)$/i,'').replace(/[^a-zA-Z0-9._-]/g,'_');
       if(useCaption && p.caption) nameBit = sanitize(p.caption).replace(/\s+/g,'_') || nameBit;
       const fname = `${String(i+1).padStart(2,'0')}_${nameBit}.jpg`;
-      f.file(fname, p.data.split(',')[1], {base64:true});
+      const _d2 = photoDataFor(p); if(_d2) f.file(fname, _d2.split(',')[1], {base64:true});
       count++;
     });
   };
@@ -4763,15 +4972,52 @@ function hideProgress(){
 }
 
 // ============= SAVE / LOAD SURVEY FILE =============
-function saveSurveyFile(){
+async function saveSurveyFile(){
   syncStateFromForm();
   if(!state.storeNumber || !state.storeName){
     toast('Fill in store number & name first','error'); goTo('store'); return;
   }
+  // Pre-resolve all photos so we can inline their data into the JSON
+  await preResolveAllPhotos(state);
+  // Deep clone state then walk it, replacing each {id, name} photo with {name, data}
+  // so the file is self-contained and portable across devices.
+  const portable = JSON.parse(JSON.stringify(state));
+  const denormArr = arr => {
+    if(!Array.isArray(arr)) return;
+    for(let i = 0; i < arr.length; i++){
+      const p = arr[i];
+      if(p && p.id && !p.data){
+        const data = photoDataFor(p);
+        if(data){
+          arr[i] = { name: p.name || '', data, caption: p.caption || '' };
+        }
+      }
+    }
+  };
+  if(portable.storefront && portable.storefront.id && !portable.storefront.data){
+    const data = photoDataFor(portable.storefront);
+    if(data) portable.storefront = { name: portable.storefront.name || 'storefront', data };
+  }
+  if(portable.checklist){
+    Object.values(portable.checklist).forEach(d => denormArr(d.photos));
+  }
+  if(Array.isArray(portable.structures)){
+    portable.structures.forEach(s => {
+      if(s.checklist) Object.values(s.checklist).forEach(d => denormArr(d.photos));
+      denormArr(s.refPhotos);
+    });
+  }
+  if(Array.isArray(portable.freeForm)){
+    portable.freeForm.forEach(f => denormArr(f.photos));
+  }
+  if(portable.refPhotos){
+    Object.values(portable.refPhotos).forEach(arr => denormArr(arr));
+  }
+
   const payload = {
     _format:'mccoys-inspection-v2',
     _savedAt: new Date().toISOString(),
-    survey: state
+    survey: portable
   };
   const json = JSON.stringify(payload);
   const sizeMB = (json.length / (1024*1024)).toFixed(1);
@@ -4838,6 +5084,12 @@ function loadSurveyFile(file){
 
       state = Object.assign(newState(), surveyData);
       migrate();
+      // Migrate any inline photos in the loaded file into our photoStore
+      // (the JSON file is portable so it always has inline photos; we move them out)
+      try {
+        const migratedAny = await migrateSurveyPhotosToStore(state);
+        if(migratedAny) console.log('Loaded survey: photos migrated to store');
+      } catch(migErr){ console.warn('Loaded-file photo migration failed:', migErr); }
       syncFormFromState();
       save();
       renderStorefront();
@@ -4940,6 +5192,11 @@ async function loadHistory(idx){
   const hist = await getHistory();
   state = hist[idx];
   migrate();
+  // Migrate any inline photos in the loaded archived survey to photoStore
+  try {
+    const migratedAny = await migrateSurveyPhotosToStore(state);
+    if(migratedAny) console.log('Loaded archive: photos migrated to store');
+  } catch(migErr){ console.warn('Archive photo migration failed:', migErr); }
   hist.splice(idx,1);
   await setHistory(hist);
   save();
@@ -4956,8 +5213,10 @@ async function deleteHistory(idx){
   const label = `Store ${survey.storeNumber||'?'} ${survey.storeName||''}`.trim();
   const date = survey.surveyDate || '';
   if(!confirm(`Delete archived survey?\n\n${label}\n${date}\n\nThis cannot be undone. Make sure you've saved the PDFs and photo ZIP if you need them.`)) return;
-  hist.splice(idx,1);
+  const removed = hist.splice(idx,1)[0];
   await setHistory(hist);
+  // Clean up orphaned photos that only this survey referenced
+  if(removed) await deletePhotosOfSurvey(removed, hist);
   renderHistory();
   updateStorageGauge();
   toast('Survey deleted','ok');
