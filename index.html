@@ -93,6 +93,28 @@ body.edit-mode .add-item-row{display:flex;gap:8px;align-items:center}
 body.edit-mode .add-section-btn{display:flex}
 .add-section-btn:hover,.add-section-btn:active{background:var(--yellow-soft);border-color:var(--yellow-dark);color:var(--green)}
 
+/* Template Editor page */
+.template-actions{display:flex;gap:8px;flex-wrap:wrap;margin:14px 0 18px}
+.template-actions .btn{flex:1;min-width:140px;font-size:12px;padding:10px 12px;display:flex;align-items:center;justify-content:center;gap:6px}
+.template-actions .btn .ti{font-size:14px}
+.template-import-btn{position:relative;overflow:hidden;cursor:pointer}
+.template-import-btn input[type="file"]{position:absolute;left:-9999px;width:1px;height:1px;opacity:0}
+.template-reset-btn{background:#fff !important;color:var(--bad) !important;border:1.5px solid var(--bad) !important}
+.template-reset-btn:hover,.template-reset-btn:active{background:var(--bad) !important;color:#fff !important}
+.template-status{background:var(--yellow-soft);border:1px solid var(--yellow-dark);color:#8a5a00;padding:10px 14px;border-radius:8px;font-size:12px;font-weight:600;margin-bottom:14px;display:none}
+.template-status.active{display:block}
+.template-status .ti{vertical-align:middle;margin-right:4px}
+
+/* Template editor reuses checklist section/item styling but always shows edit controls */
+#page-template .section{margin-bottom:14px}
+#page-template .item .edit-item-controls{display:flex !important;gap:4px}
+#page-template .add-item-row{display:flex !important}
+#page-template .item-actions{display:none}
+#page-template .section-header .edit-section-controls{display:flex !important}
+#page-template .template-cat-actions{display:flex;gap:8px;margin:12px 0;flex-wrap:wrap}
+#page-template .template-cat-btn{background:var(--green);color:#fff;border:none;padding:10px 14px;border-radius:8px;font-weight:700;cursor:pointer;font-size:12px;text-transform:uppercase;letter-spacing:.3px;display:inline-flex;align-items:center;gap:6px}
+#page-template .template-cat-btn:hover,#page-template .template-cat-btn:active{background:var(--green-mid)}
+
 /* Edit catalog/structure buttons - only in edit mode */
 .edit-catalog-row{display:none;gap:8px;margin:12px 0;flex-wrap:wrap}
 body.edit-mode .edit-catalog-row{display:flex}
@@ -154,7 +176,7 @@ body.edit-mode .edit-catalog-row{display:flex}
 }
 
 /* ===== BOTTOM NAV ===== */
-nav{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(135deg,#004327 0%,var(--green-mid) 100%);border-top:4px solid var(--yellow);display:grid;grid-template-columns:repeat(6,1fr);z-index:100;padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -2px 12px rgba(0,0,0,.25)}
+nav{position:fixed;bottom:0;left:0;right:0;background:linear-gradient(135deg,#004327 0%,var(--green-mid) 100%);border-top:4px solid var(--yellow);display:grid;grid-template-columns:repeat(7,1fr);z-index:100;padding-bottom:env(safe-area-inset-bottom);box-shadow:0 -2px 12px rgba(0,0,0,.25)}
 nav button{background:none;border:none;color:rgba(255,255,255,.75);padding:10px 2px 8px;font-size:11px;font-weight:700;display:flex;flex-direction:column;align-items:center;gap:4px;cursor:pointer;transition:color .12s;letter-spacing:.2px;line-height:1.2;text-align:center;position:relative}
 nav button .ti{font-size:22px}
 nav button .nav-emoji{font-size:22px;line-height:1;display:block}
@@ -739,6 +761,23 @@ body.edit-mode .struct-reset-row{display:flex}
   <div id="historyList"></div>
 </div>
 
+<div class="page" id="page-template">
+  <h1>Template Editor</h1>
+  <p class="page-subtitle">Customize the default checklist that new inspections start with. Changes here become your defaults — they don't affect surveys already in progress.</p>
+
+  <div class="template-actions">
+    <button class="btn btn-secondary" onclick="exportMasterTemplate()"><i class="ti ti-download"></i> Export Template</button>
+    <label class="btn btn-secondary template-import-btn">
+      <i class="ti ti-upload"></i> Import Template
+      <input type="file" accept=".json,application/json" onchange="importMasterTemplate(this.files[0])">
+    </label>
+    <button class="btn btn-secondary template-reset-btn" onclick="resetMasterTemplate()"><i class="ti ti-refresh"></i> Reset to Factory Defaults</button>
+  </div>
+
+  <div id="templateStatus" class="template-status"></div>
+  <div id="templateEditorBody"></div>
+</div>
+
 </main>
 
 <nav>
@@ -748,6 +787,7 @@ body.edit-mode .struct-reset-row{display:flex}
   <button data-page="review" onclick="goTo('review')"><span class="nav-emoji">⚠️</span>Review</button>
   <button data-page="export" onclick="goTo('export')"><span class="nav-emoji">📤</span>Export</button>
   <button data-page="history" onclick="goTo('history')"><span class="nav-emoji">📚</span>History</button>
+  <button data-page="template" onclick="goTo('template')"><span class="nav-emoji">⚙️</span>Template</button>
 </nav>
 
 <div class="modal" id="photoModal" onclick="closePhotoModal()">
@@ -1064,38 +1104,78 @@ function newState(){
   };
 }
 
-// ====== TEMPLATE ACCESSORS — return override if set, else master constant ======
-// Use these EVERYWHERE instead of CHECKLIST / PARTS_CATALOG / STRUCTURE_TYPES directly
+// ====== TEMPLATE LAYERS ======
+// Three layers, in priority order (highest to lowest):
+//   1. state.checklistOverride / etc — per-survey edits (EDIT mode while inspecting)
+//   2. masterTemplate.checklist / etc — user-customized defaults (Template Editor page)
+//   3. CHECKLIST / etc — hardcoded factory defaults baked into the app code
+//
+// The master template lives in localforage under MASTER_TEMPLATE_KEY so it persists
+// across surveys but only on this device. Use the Template Editor page to modify it,
+// or use Export/Import to move it between devices.
+let masterTemplate = null; // loaded from localforage on app start; null = use hardcoded defaults
+let _editingTemplateNotSurvey = false; // flag so existing edit helpers know to write to template instead of survey
+
 function currentChecklist(){
-  if(state.checklistOverride && typeof state.checklistOverride === 'object') return state.checklistOverride;
+  // When editing the template, skip per-survey overrides
+  if(_editingTemplateNotSurvey){
+    if(masterTemplate && masterTemplate.checklist) return masterTemplate.checklist;
+    return CHECKLIST;
+  }
+  if(state && state.checklistOverride && typeof state.checklistOverride === 'object') return state.checklistOverride;
+  if(masterTemplate && masterTemplate.checklist) return masterTemplate.checklist;
   return CHECKLIST;
 }
 function currentParts(){
-  if(state.partsCatalogOverride && typeof state.partsCatalogOverride === 'object') return state.partsCatalogOverride;
+  if(_editingTemplateNotSurvey){
+    if(masterTemplate && masterTemplate.partsCatalog) return masterTemplate.partsCatalog;
+    return PARTS_CATALOG;
+  }
+  if(state && state.partsCatalogOverride && typeof state.partsCatalogOverride === 'object') return state.partsCatalogOverride;
+  if(masterTemplate && masterTemplate.partsCatalog) return masterTemplate.partsCatalog;
   return PARTS_CATALOG;
 }
 function currentStructureTypes(){
-  if(state.structureTypesOverride && typeof state.structureTypesOverride === 'object') return state.structureTypesOverride;
+  if(_editingTemplateNotSurvey){
+    if(masterTemplate && masterTemplate.structureTypes) return masterTemplate.structureTypes;
+    return STRUCTURE_TYPES;
+  }
+  if(state && state.structureTypesOverride && typeof state.structureTypesOverride === 'object') return state.structureTypesOverride;
+  if(masterTemplate && masterTemplate.structureTypes) return masterTemplate.structureTypes;
   return STRUCTURE_TYPES;
 }
 
 // Lazily fork the master template — only create an override the moment user makes their first edit.
 // Deep-copies the master into state so further edits don't mutate the master constant.
+// NOTE: forks from the EFFECTIVE current template, which may be the master template OR the
+// hardcoded defaults. So per-survey edits start from whatever the user customized as their default.
 function ensureChecklistOverride(){
+  if(_editingTemplateNotSurvey){
+    ensureMasterTemplate();
+    return masterTemplate.checklist;
+  }
   if(!state.checklistOverride){
-    state.checklistOverride = JSON.parse(JSON.stringify(CHECKLIST));
+    state.checklistOverride = JSON.parse(JSON.stringify(currentChecklist()));
   }
   return state.checklistOverride;
 }
 function ensurePartsOverride(){
+  if(_editingTemplateNotSurvey){
+    ensureMasterTemplate();
+    return masterTemplate.partsCatalog;
+  }
   if(!state.partsCatalogOverride){
-    state.partsCatalogOverride = JSON.parse(JSON.stringify(PARTS_CATALOG));
+    state.partsCatalogOverride = JSON.parse(JSON.stringify(currentParts()));
   }
   return state.partsCatalogOverride;
 }
 function ensureStructureTypesOverride(){
+  if(_editingTemplateNotSurvey){
+    ensureMasterTemplate();
+    return masterTemplate.structureTypes;
+  }
   if(!state.structureTypesOverride){
-    state.structureTypesOverride = JSON.parse(JSON.stringify(STRUCTURE_TYPES));
+    state.structureTypesOverride = JSON.parse(JSON.stringify(currentStructureTypes()));
   }
   return state.structureTypesOverride;
 }
@@ -1318,6 +1398,12 @@ function openPartsCatalogEditor(){
 }
 function closePartsCatalogEditor(){
   document.getElementById('partsCatalogEditor').classList.remove('open');
+  if(_editingTemplateNotSurvey){
+    _editingTemplateNotSurvey = false;
+    bumpTemplateModifiedAt();
+    saveMasterTemplate();
+    renderTemplateEditor();
+  }
 }
 
 function buildPartsCatalogModal(){
@@ -1430,6 +1516,12 @@ function openStructureTypesEditor(){
 }
 function closeStructureTypesEditor(){
   document.getElementById('structureTypesEditor').classList.remove('open');
+  if(_editingTemplateNotSurvey){
+    _editingTemplateNotSurvey = false;
+    bumpTemplateModifiedAt();
+    saveMasterTemplate();
+    renderTemplateEditor();
+  }
 }
 function buildStructureTypesModal(){
   const html = `
@@ -1541,6 +1633,7 @@ function cssEscape(s){
 
 const SAVE_KEY = "mccoys_inspection_current_v2";
 const HIST_KEY = 'mccoys_inspection_history_v2';
+const MASTER_TEMPLATE_KEY = 'mccoys_master_template_v1';
 
 // Configure localforage to use IndexedDB primarily (with localStorage fallback)
 // This is the SURVEYS store — keeps the skeleton (text, statuses, photo IDs) only
@@ -1753,8 +1846,9 @@ function photoImgTag(photoEntry, opts){
     return `<img class="${cls}" src="${cached}" ${safeId ? `data-photo-id="${safeId}"` : ''} onclick="openPhotoModalFromImg(this)">`;
   }
   if(photoEntry && photoEntry.id){
-    // Placeholder — will be hydrated async
-    return `<img class="${cls} photo-loading" data-photo-id="${photoEntry.id}" src="" onclick="openPhotoModalFromImg(this)">`;
+    // Placeholder — will be hydrated async. Use a 1x1 transparent gif as src so
+    // the browser doesn't fire an error event or flash a broken-image icon.
+    return `<img class="${cls} photo-loading" data-photo-id="${photoEntry.id}" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==" onclick="openPhotoModalFromImg(this)">`;
   }
   return '';
 }
@@ -1941,6 +2035,46 @@ async function getHistory(){
 
 async function setHistory(hist){
   await localforage.setItem(HIST_KEY, hist);
+}
+
+// ============= MASTER TEMPLATE LOAD/SAVE =============
+async function loadMasterTemplate(){
+  try {
+    const t = await localforage.getItem(MASTER_TEMPLATE_KEY);
+    if(t && typeof t === 'object'){
+      masterTemplate = t;
+    }
+  } catch(e){
+    console.warn('Could not load master template:', e);
+  }
+}
+
+async function saveMasterTemplate(){
+  if(!masterTemplate){
+    await localforage.removeItem(MASTER_TEMPLATE_KEY);
+    return;
+  }
+  await localforage.setItem(MASTER_TEMPLATE_KEY, masterTemplate);
+}
+
+// Initialize masterTemplate object if not yet set, deep-copying current defaults
+function ensureMasterTemplate(){
+  if(!masterTemplate){
+    masterTemplate = {
+      checklist: JSON.parse(JSON.stringify(CHECKLIST)),
+      partsCatalog: JSON.parse(JSON.stringify(PARTS_CATALOG)),
+      structureTypes: JSON.parse(JSON.stringify(STRUCTURE_TYPES)),
+      _modifiedAt: new Date().toISOString()
+    };
+  }
+  // NOTE: don't update _modifiedAt here — only update it when something actually changes.
+  // Use bumpTemplateModifiedAt() in each edit operation.
+  return masterTemplate;
+}
+
+function bumpTemplateModifiedAt(){
+  if(!masterTemplate) return;
+  masterTemplate._modifiedAt = new Date().toISOString();
 }
 
 // Show estimated storage usage so user knows how full things are
@@ -2217,12 +2351,28 @@ async function clearAllHistory(){
 }
 
 async function nukeAllStorage(){
-  if(!confirm('ERASE EVERYTHING?\n\nThis deletes:\n• The current survey\n• All archived history\n• All saved data\n• All photos\n\nYou will need to start fresh. This CANNOT be undone.')) return;
+  if(!confirm('ERASE EVERYTHING?\n\nThis deletes:\n• The current survey\n• All archived history\n• All photos\n• Your custom template (back to factory defaults)\n\nYou will need to start fresh. This CANNOT be undone.')) return;
   if(!confirm('Are you absolutely sure? This is your last chance to cancel.')) return;
   try {
+    // Clear the main localforage store
     await localforage.clear();
-    try { await photoStore.clear(); } catch(e){ console.warn('photo store clear failed', e); }
+    // Clear photo store via localforage instance
+    try { await photoStore.clear(); } catch(e){ console.warn('photo store clear via instance failed', e); }
+    // Also directly delete the IndexedDB databases to ensure storage is reclaimed
+    try {
+      await new Promise((res, rej) => {
+        const req = indexedDB.deleteDatabase('localforage');
+        req.onsuccess = res; req.onerror = rej; req.onblocked = res;
+      });
+    } catch(e){ console.warn('deleteDatabase localforage failed', e); }
+    try {
+      await new Promise((res, rej) => {
+        const req = indexedDB.deleteDatabase('mccoys-inspection');
+        req.onsuccess = res; req.onerror = rej; req.onblocked = res;
+      });
+    } catch(e){ console.warn('deleteDatabase mccoys-inspection failed', e); }
     clearPhotoCache();
+    masterTemplate = null;
     // Also remove any legacy localStorage keys
     try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem(HIST_KEY); } catch(e){}
     state = newState();
@@ -2290,6 +2440,14 @@ function goTo(page){
   document.getElementById('page-'+page).classList.add('active');
   document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
   document.querySelectorAll(`nav button[data-page="${page}"]`).forEach(b=>b.classList.add('active'));
+  // Defensive: clear the template-editing flag whenever we leave the template page.
+  // The flag is normally cleared when its modal closes, but if user navigates away with
+  // a modal open the flag could leak into per-survey editing on other pages.
+  if(page !== 'template' && _editingTemplateNotSurvey){
+    _editingTemplateNotSurvey = false;
+    bumpTemplateModifiedAt();
+    saveMasterTemplate();
+  }
   if(page === 'store'){
     // Scroll to top, where the store info form is
     const heading = document.getElementById('storeInfoHeading');
@@ -2301,6 +2459,7 @@ function goTo(page){
   if(page==='review') renderReview();
   if(page==='history') renderHistory();
   if(page==='refs') renderGlobalRefPhotos();
+  if(page==='template') renderTemplateEditor();
   if(page==='store'){
     renderStorefront();
     renderWalk();  // walk is now part of store page, render it too
@@ -5275,6 +5434,242 @@ async function deleteHistory(idx){
   toast('Survey deleted','ok');
 }
 
+// ============= TEMPLATE EDITOR =============
+// The Template Editor is a permanent edit-mode UI for the MASTER template
+// (defaults applied to all new surveys, stored in localforage).
+// Differences from per-survey EDIT mode:
+//   - Always-on edit controls (rename/add/delete sections + items)
+//   - Status buttons hidden (this is the template, not a survey)
+//   - Writes to masterTemplate.checklist / partsCatalog / structureTypes
+//   - Saves to localforage after every change
+
+function renderTemplateEditor(){
+  // Make sure we have a working masterTemplate object — first edit forks from defaults
+  ensureMasterTemplate();
+  const body = document.getElementById('templateEditorBody');
+  if(!body) return;
+
+  // Status banner: shown when template has been customized
+  const status = document.getElementById('templateStatus');
+  if(status){
+    status.classList.add('active');
+    status.innerHTML = `<i class="ti ti-check"></i> Custom template active — all new surveys will start with these defaults. Last modified: ${formatTemplateDate(masterTemplate._modifiedAt)}`;
+  }
+
+  // Render checklist sections
+  let html = '';
+  const checklist = masterTemplate.checklist;
+  Object.entries(checklist).forEach(([sectionName, sectionDef])=>{
+    html += renderTemplateSection(sectionName, sectionDef);
+  });
+  html += `<button class="add-section-btn" style="display:flex" onclick="templateAddSection()"><i class="ti ti-plus"></i> Add New Section</button>`;
+
+  // Catalog editor buttons
+  html += `
+    <div class="template-cat-actions" style="margin-top:24px">
+      <button class="template-cat-btn" onclick="openEditPartsCatalogForTemplate()"><i class="ti ti-list"></i> Edit Parts Catalog</button>
+      <button class="template-cat-btn" onclick="openEditStructureTypesForTemplate()"><i class="ti ti-building"></i> Edit Outside Structures</button>
+    </div>
+  `;
+
+  body.innerHTML = html;
+}
+
+function formatTemplateDate(iso){
+  if(!iso) return 'just now';
+  try {
+    const d = new Date(iso);
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+  } catch(e){ return ''; }
+}
+
+function renderTemplateSection(sectionName, sectionDef){
+  const items = sectionDef.items || [];
+  const safeKey = cssEscape(sectionName);
+  let itemsHtml = items.map(it => `
+    <div class="item" data-section-key="${escapeHtml(sectionName)}" data-item-id="${it.id}">
+      <div class="item-label">
+        <input class="item-label-input" type="text" value="${escapeHtml(it.label)}" onchange="templateRenameItem('${safeKey}','${it.id}',this.value)">
+      </div>
+      <div class="edit-item-controls" style="display:flex;gap:4px">
+        <button class="edit-btn del" onclick="templateRemoveItem('${safeKey}','${it.id}','${cssEscape(it.label)}')"><i class="ti ti-trash"></i></button>
+      </div>
+    </div>
+  `).join('');
+
+  return `
+    <div class="section" data-section-key="${escapeHtml(sectionName)}">
+      <div class="section-header">
+        <div class="section-title-wrap">
+          <input class="section-title-input" type="text" value="${escapeHtml(sectionName)}" onchange="templateRenameSection('${safeKey}',this.value)">
+        </div>
+        <div class="edit-section-controls" style="display:flex;gap:6px">
+          <button class="edit-btn del" onclick="templateRemoveSection('${safeKey}')"><i class="ti ti-trash"></i> <span>Delete Section</span></button>
+        </div>
+      </div>
+      <div>
+        ${itemsHtml}
+        <div class="add-item-row" data-section-key="${escapeHtml(sectionName)}" style="display:flex">
+          <input type="text" placeholder="Add new item to ${escapeHtml(sectionName)}" onkeydown="if(event.key==='Enter'){templateAddItem('${safeKey}');event.preventDefault()}">
+          <button onclick="templateAddItem('${safeKey}')"><i class="ti ti-plus"></i> Add</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// ---- Template edit operations (mirror the per-survey ones but write to masterTemplate) ----
+async function templateAddSection(){
+  const name = prompt('New section name:');
+  if(!name) return;
+  const trimmed = name.trim();
+  if(!trimmed){ toast('Name cannot be empty','error'); return; }
+  ensureMasterTemplate();
+  if(masterTemplate.checklist[trimmed]){ toast('A section with that name already exists','error'); return; }
+  masterTemplate.checklist[trimmed] = { items: [] };
+  bumpTemplateModifiedAt();
+  await saveMasterTemplate();
+  renderTemplateEditor();
+  toast('Section added','ok');
+}
+
+async function templateRenameSection(oldName, newName){
+  newName = (newName||'').trim();
+  if(!newName){ toast('Section name cannot be empty','error'); renderTemplateEditor(); return; }
+  if(oldName === newName) return;
+  ensureMasterTemplate();
+  if(masterTemplate.checklist[newName]){ toast('A section with that name already exists','error'); renderTemplateEditor(); return; }
+  // Re-key in place while preserving order
+  const newChecklist = {};
+  Object.entries(masterTemplate.checklist).forEach(([k,v]) => {
+    newChecklist[k === oldName ? newName : k] = v;
+  });
+  masterTemplate.checklist = newChecklist;
+  bumpTemplateModifiedAt();
+  await saveMasterTemplate();
+  renderTemplateEditor();
+  toast('Section renamed','ok');
+}
+
+async function templateRemoveSection(sectionName){
+  if(!confirm(`Remove section "${sectionName}" from the template?\n\nAll items in this section will also be removed. New surveys won't have this section, but in-progress and past surveys are unaffected.`)) return;
+  ensureMasterTemplate();
+  delete masterTemplate.checklist[sectionName];
+  bumpTemplateModifiedAt();
+  await saveMasterTemplate();
+  renderTemplateEditor();
+  toast('Section removed','ok');
+}
+
+async function templateAddItem(sectionName){
+  ensureMasterTemplate();
+  const sec = masterTemplate.checklist[sectionName];
+  if(!sec){ toast('Section not found','error'); return; }
+  const inputEl = document.querySelector(`#page-template .add-item-row[data-section-key="${cssEscape(sectionName)}"] input`);
+  if(!inputEl) return;
+  const label = inputEl.value.trim();
+  if(!label){ toast('Enter an item label','error'); return; }
+  const idPrefix = sectionName.toLowerCase().replace(/[^a-z]/g,'').slice(0,6) || 'item';
+  const newId = `${idPrefix}_${Date.now()}`;
+  if(!sec.items) sec.items = [];
+  sec.items.push({ id: newId, label: label });
+  inputEl.value = '';
+  bumpTemplateModifiedAt();
+  await saveMasterTemplate();
+  renderTemplateEditor();
+  toast('Item added','ok');
+}
+
+async function templateRenameItem(sectionName, itemId, newLabel){
+  newLabel = (newLabel||'').trim();
+  if(!newLabel){ toast('Item label cannot be empty','error'); renderTemplateEditor(); return; }
+  ensureMasterTemplate();
+  const sec = masterTemplate.checklist[sectionName];
+  if(!sec) return;
+  const it = (sec.items || []).find(x => x.id === itemId);
+  bumpTemplateModifiedAt();
+  if(it){ it.label = newLabel; await saveMasterTemplate(); }
+}
+
+async function templateRemoveItem(sectionName, itemId, itemLabel){
+  if(!confirm(`Remove "${itemLabel}" from the template?`)) return;
+  ensureMasterTemplate();
+  const sec = masterTemplate.checklist[sectionName];
+  if(!sec) return;
+  sec.items = (sec.items || []).filter(it => it.id !== itemId);
+  bumpTemplateModifiedAt();
+  await saveMasterTemplate();
+  renderTemplateEditor();
+  toast('Item removed','ok');
+}
+
+// Parts catalog and structure types — open the existing modals but route to template
+function openEditPartsCatalogForTemplate(){
+  _editingTemplateNotSurvey = true;
+  if(typeof openPartsCatalogEditor === 'function') openPartsCatalogEditor();
+  else { _editingTemplateNotSurvey = false; toast('Parts editor not available','error'); }
+}
+
+function openEditStructureTypesForTemplate(){
+  _editingTemplateNotSurvey = true;
+  if(typeof openStructureTypesEditor === 'function') openStructureTypesEditor();
+  else { _editingTemplateNotSurvey = false; toast('Structures editor not available','error'); }
+}
+
+// ---- Export / Import / Reset ----
+async function exportMasterTemplate(){
+  ensureMasterTemplate();
+  const payload = {
+    _format: 'mccoys-master-template-v1',
+    _exportedAt: new Date().toISOString(),
+    template: masterTemplate
+  };
+  const json = JSON.stringify(payload, null, 2);
+  const blob = new Blob([json], {type: 'application/json'});
+  const date = new Date().toISOString().slice(0,10);
+  const filename = `mccoys_template_${date}.json`;
+  saveAs(blob, filename);
+  toast(`Template exported (${(json.length/1024).toFixed(1)} KB)`);
+}
+
+function importMasterTemplate(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = async e => {
+    try {
+      const parsed = JSON.parse(e.target.result);
+      const tpl = parsed.template || parsed; // accept raw template or wrapped
+      if(!tpl.checklist){
+        toast('Invalid template file: missing checklist','error');
+        return;
+      }
+      if(!confirm('Replace your current template with this file?\n\nYour existing template will be overwritten. (Surveys already in progress or in History are not affected.)')) return;
+      masterTemplate = {
+        checklist: tpl.checklist,
+        partsCatalog: tpl.partsCatalog || JSON.parse(JSON.stringify(PARTS_CATALOG)),
+        structureTypes: tpl.structureTypes || JSON.parse(JSON.stringify(STRUCTURE_TYPES)),
+        _modifiedAt: new Date().toISOString()
+      };
+      await saveMasterTemplate();
+      renderTemplateEditor();
+      toast('Template imported','ok');
+    } catch(err){
+      toast('Import failed: ' + (err.message || 'invalid file'),'error');
+    }
+  };
+  reader.readAsText(file);
+}
+
+async function resetMasterTemplate(){
+  if(!confirm('Reset template to factory defaults?\n\nYour custom template will be deleted. New surveys will start with the original built-in checklist, parts, and structure types.\n\n(Surveys already in progress or in History are not affected.)')) return;
+  masterTemplate = null;
+  await localforage.removeItem(MASTER_TEMPLATE_KEY);
+  const status = document.getElementById('templateStatus');
+  if(status) status.classList.remove('active');
+  renderTemplateEditor();
+  toast('Template reset to factory defaults','ok');
+}
+
 // ============= UTILITIES =============
 function syncStateFromForm(){
   ['storeNumber','storeName','surveyDate','surveyorName','surveyorEmail','surveyorPhone','weather','generalNotes'].forEach(k=>{
@@ -5307,6 +5702,7 @@ function closePhotoModal(){
 
 // ============= INIT =============
 window.addEventListener('DOMContentLoaded', async ()=>{
+  await loadMasterTemplate();
   await load();
   renderStorefront();
   goTo('store');
