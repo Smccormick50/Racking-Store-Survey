@@ -82,11 +82,13 @@ body.edit-mode .edit-item-controls,body.edit-mode .edit-section-controls{display
 
 /* Hide bottom-of-section "+ Add item" when not in edit mode */
 .add-item-row{display:none;padding:12px 16px;background:#fffceb;border-top:1px dashed var(--yellow-dark)}
-body.edit-mode .add-item-row{display:flex;gap:8px;align-items:center}
-.add-item-row input{flex:1;padding:8px 10px;border:1.5px solid var(--yellow-dark);background:#fff;border-radius:6px;font-size:14px;font-family:inherit}
+body.edit-mode .add-item-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.add-item-row input{flex:1 1 160px;min-width:120px;padding:8px 10px;border:1.5px solid var(--yellow-dark);background:#fff;border-radius:6px;font-size:14px;font-family:inherit}
 .add-item-row input:focus{outline:none;border-color:var(--green);box-shadow:0 0 0 3px rgba(14,74,42,.15)}
 .add-item-row button{background:var(--green);color:#fff;border:none;padding:8px 14px;border-radius:6px;font-weight:700;cursor:pointer;text-transform:uppercase;font-size:11px;letter-spacing:.3px;display:flex;align-items:center;gap:4px;flex-shrink:0}
 .add-item-row button:hover,.add-item-row button:active{background:var(--green-mid)}
+.add-item-row button.racking{background:var(--yellow);color:var(--green);border:1.5px solid var(--yellow-dark)}
+.add-item-row button.racking:hover,.add-item-row button.racking:active{background:var(--yellow-dark);color:#fff}
 
 /* The "+ Add Section" button only visible in edit mode */
 .add-section-btn{display:none;width:100%;background:#fff;border:2px dashed var(--green);color:var(--green);padding:14px;border-radius:10px;font-size:13px;font-weight:700;cursor:pointer;margin-top:12px;text-transform:uppercase;letter-spacing:.4px;align-items:center;justify-content:center;gap:8px}
@@ -1100,6 +1102,9 @@ function newState(){
     checklistOverride: null,     // null or object: {sectionName: {icon, items: [...], skipped:bool}}
     partsCatalogOverride: null,  // null or object: {rackType: [partString, ...]}
     structureTypesOverride: null, // null or object: {typeName: [items, ...]}
+    // Custom item ids (added via Edit Mode) that were marked as "Racking" — persisted here because
+    // RACKING_IDS itself is an in-memory Set, not part of saved state. Rehydrated by migrate().
+    customRackingIds: [],
     createdAt:Date.now()
   };
 }
@@ -1224,9 +1229,19 @@ function resetTemplateEdits(){
   toast('Template reset to defaults','ok');
 }
 
+// Mark an item id as racking — adds to RACKING_IDS (in-memory) AND persists it to
+// state.customRackingIds so it survives save/reload and gets re-applied by migrate().
+function markItemAsRacking(itemId){
+  RACKING_IDS.add(itemId);
+  if(!state.customRackingIds) state.customRackingIds = [];
+  if(!state.customRackingIds.includes(itemId)) state.customRackingIds.push(itemId);
+}
+
 // ===== CHECKLIST EDIT OPERATIONS =====
-// Add a new item to a section
-function addItemToSection(sectionName){
+// Add a new item to a section. isRacking=true marks it as a racking item: it gets the
+// rack-type/part dropdowns when flagged Needs Work/Issue, and routes to the Racking PDF
+// and Racking findings tab instead of Facility.
+function addItemToSection(sectionName, isRacking){
   const inputEl = document.querySelector(`.add-item-row[data-section="${cssEscape(sectionName)}"] input`);
   if(!inputEl) return;
   const label = inputEl.value.trim();
@@ -1237,10 +1252,11 @@ function addItemToSection(sectionName){
   const idPrefix = sectionName.toLowerCase().replace(/[^a-z]/g,'').slice(0,4) || 'item';
   const newId = `${idPrefix}_custom_${Date.now()}`;
   cl[sectionName].items.push({ id: newId, label: label, custom: true });
+  if(isRacking) markItemAsRacking(newId);
   inputEl.value = '';
   save();
   renderWalk();
-  toast('Added: ' + label,'ok');
+  toast((isRacking ? 'Racking item added: ' : 'Added: ') + label,'ok');
 }
 
 // Rename an item
@@ -1272,7 +1288,7 @@ function removeItem(sectionName, itemId, itemLabel){
 // These edits live on the structure instance (s.itemsOverride) — they affect only THIS structure,
 // not other structures of the same type, and not the master template.
 
-function addItemToStruct(structId){
+function addItemToStruct(structId, isRacking){
   const s = state.structures.find(x=>x.id===structId);
   if(!s) return;
   const inputEl = document.querySelector(`.add-item-row[data-struct-id="${structId}"] input`);
@@ -1284,10 +1300,11 @@ function addItemToStruct(structId){
   const idPrefix = (s.type || 'st').toLowerCase().replace(/[^a-z]/g,'').slice(0,4) || 'st';
   const newId = `${idPrefix}_custom_${Date.now()}`;
   items.push({ id: newId, label: label, custom: true });
+  if(isRacking) markItemAsRacking(newId);
   inputEl.value = '';
   save();
   renderStructures();
-  toast('Added: ' + label,'ok');
+  toast((isRacking ? 'Racking item added: ' : 'Added: ') + label,'ok');
 }
 
 function renameStructItem(structId, itemId, newLabel){
@@ -2383,6 +2400,11 @@ function migrate(){
   state.structures.forEach(s=>{ if(!s.refPhotos) s.refPhotos = []; });
   state.freeForm = state.freeForm || [];
   state.checklist = state.checklist || {};
+  state.customRackingIds = state.customRackingIds || [];
+
+  // Rehydrate RACKING_IDS (in-memory Set) with any custom items this survey marked as racking.
+  // Needed because RACKING_IDS isn't itself saved — only the list of ids that should be in it.
+  state.customRackingIds.forEach(id => RACKING_IDS.add(id));
 
   // One-time migration: old "Restrooms" ref photos → Men's Restroom (kept together)
   // After Restrooms was split into Men's/Women's, photos stored under the old key
@@ -2537,8 +2559,9 @@ function renderWalk(){
       <div class="section-body">
         ${sectionDef.items.map(it => renderItem(it, state.checklist, sectionName)).join('')}
         <div class="add-item-row" data-section="${escapeHtml(sectionName)}">
-          <input type="text" placeholder="Add new check item (e.g. 'Eye-wash station')" onkeydown="if(event.key==='Enter'){addItemToSection('${cssEscape(sectionName)}');event.preventDefault()}">
-          <button onclick="addItemToSection('${cssEscape(sectionName)}')"><i class="ti ti-plus"></i> Add</button>
+          <input type="text" placeholder="Add new check item (e.g. 'Eye-wash station')" onkeydown="if(event.key==='Enter'){addItemToSection('${cssEscape(sectionName)}',false);event.preventDefault()}">
+          <button onclick="addItemToSection('${cssEscape(sectionName)}',false)"><i class="ti ti-plus"></i> Check Item</button>
+          <button class="racking" onclick="addItemToSection('${cssEscape(sectionName)}',true)" title="Adds rack-type/part dropdowns and routes to the Racking PDF"><i class="ti ti-tool"></i> Racking Item</button>
         </div>
         ${renderRefStrip(sectionName, refPhotos, false)}
       </div>
@@ -3544,8 +3567,9 @@ function renderStructures(){
         <div>
           ${items.map(it => renderStructItemRow(s, it)).join('')}
           <div class="add-item-row" data-struct-id="${s.id}">
-            <input type="text" placeholder="Add custom item to ${escapeHtml(s.name)} (e.g. 'Bird netting check')" onkeydown="if(event.key==='Enter'){addItemToStruct('${s.id}');event.preventDefault()}">
-            <button onclick="addItemToStruct('${s.id}')"><i class="ti ti-plus"></i> Add</button>
+            <input type="text" placeholder="Add custom item to ${escapeHtml(s.name)} (e.g. 'Bird netting check')" onkeydown="if(event.key==='Enter'){addItemToStruct('${s.id}',false);event.preventDefault()}">
+            <button onclick="addItemToStruct('${s.id}',false)"><i class="ti ti-plus"></i> Check Item</button>
+            <button class="racking" onclick="addItemToStruct('${s.id}',true)" title="Adds rack-type/part dropdowns and routes to the Racking PDF"><i class="ti ti-tool"></i> Racking Item</button>
           </div>
           ${isCustomized ? `<div class="struct-reset-row"><button class="struct-reset-btn" onclick="resetStructItems('${s.id}')"><i class="ti ti-refresh"></i> Reset items to default ${escapeHtml(s.type)} template</button></div>` : ''}
           ${renderRefStrip(s.id, s.refPhotos, true)}
