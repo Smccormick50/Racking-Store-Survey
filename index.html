@@ -542,6 +542,16 @@ body.edit-mode .struct-reset-row{display:flex}
 /* ===== INSPECTION WALK HEADING ===== */
 .walk-heading{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin:24px 0 6px}
 .walk-heading h2{margin:0}
+
+/* Work Order Copy Text */
+.work-order-card{background:#fff;border:2px solid var(--green);border-radius:12px;padding:18px;margin:24px 0 18px;box-shadow:0 3px 10px rgba(14,74,42,.08)}
+.work-order-card h2{margin:0 0 5px;color:var(--green);font-size:20px;text-transform:none}
+.work-order-card p{font-size:13px;color:var(--muted);margin:0 0 14px;line-height:1.45}
+.work-order-block{margin-top:16px}
+.work-order-block h3{font-size:16px;color:var(--green);margin:0 0 8px}
+.work-order-text{width:100%;min-height:190px;box-sizing:border-box;border:1px solid #b8c6bd;border-radius:8px;padding:12px;font:13px/1.45 Arial,sans-serif;background:#f8faf8;color:#222;resize:vertical}
+.copy-work-order-btn{margin-top:8px;width:100%}
+
 </style>
 </head>
 <body>
@@ -689,6 +699,24 @@ body.edit-mode .struct-reset-row{display:flex}
   <h2 style="margin-top:28px"><i class="ti ti-hammer"></i> Carpentry Team Findings <span id="carpCount" style="font-size:14px;background:var(--yellow);padding:3px 12px;border-radius:14px;color:var(--green);font-weight:800">0</span></h2>
   <p style="font-size:13px;color:var(--muted);margin:-8px 0 12px">Items flagged for the in-house carpentry team. Toggle "Route to Carpentry Team" on any facility finding to add it here. These also still appear in the Facility PDF, marked as routed.</p>
   <div id="carpentryList"></div>
+
+
+  <div class="work-order-card">
+    <h2><i class="ti ti-clipboard-text"></i> Work Order Text</h2>
+    <p>Automatically built from this survey. Copy the text below and paste it into the work order.</p>
+
+    <div class="work-order-block">
+      <h3><i class="ti ti-tool"></i> Racking Work Order</h3>
+      <textarea id="rackingWorkOrderText" class="work-order-text" readonly></textarea>
+      <button class="btn btn-secondary copy-work-order-btn" onclick="copyWorkOrder('racking')"><i class="ti ti-copy"></i> Copy Racking Work Order</button>
+    </div>
+
+    <div class="work-order-block">
+      <h3><i class="ti ti-hammer"></i> Carpenter Work Order</h3>
+      <textarea id="carpentryWorkOrderText" class="work-order-text" readonly></textarea>
+      <button class="btn btn-secondary copy-work-order-btn" onclick="copyWorkOrder('carpentry')"><i class="ti ti-copy"></i> Copy Carpenter Work Order</button>
+    </div>
+  </div>
 
   <div class="complete-survey-card">
     <i class="ti ti-mail-forward complete-icon"></i>
@@ -3776,6 +3804,7 @@ function renderReview(){
     ? carpentry.map(renderFinding).join('')
     : '<div class="empty"><i class="ti ti-hammer"></i>No items flagged for carpentry team yet<br><small style="display:block;margin-top:6px">Toggle "Route to Carpentry Team" on any facility issue during the walk.</small></div>';
   hydratePhotoPlaceholders(document.getElementById('page-review'));
+  updateWorkOrderText();
 }
 
 function collectFindings(kind){
@@ -3831,6 +3860,79 @@ function collectFindings(kind){
     else if(kind === 'carpentry' && f.kind === 'facility' && f.carpentry === true) out.push({...f, freeForm:true, parts: f.parts || [], carpentry: true});
   });
   return out;
+}
+
+// ============= WORK ORDER COPY TEXT =============
+function buildWorkOrderText(kind){
+  const findings = collectFindings(kind);
+  const teamName = kind === 'racking' ? 'RACKING' : 'CARPENTER';
+  const lines = [];
+  lines.push(`Store ${state.storeNumber || ''} — ${state.storeName || ''}`.trim());
+  if(state.surveyDate) lines.push(`Inspection Date: ${state.surveyDate}`);
+  lines.push(`${teamName} WORK ORDER`);
+  lines.push('');
+
+  if(!findings.length){
+    lines.push(`No ${kind === 'racking' ? 'racking' : 'carpentry'} findings were identified on this inspection.`);
+    return lines.join('\n');
+  }
+
+  findings.forEach((f, i)=>{
+    lines.push(`${i+1}. ${f.location || 'Location not entered'} — ${f.label || f.description || 'Finding'}`);
+    if(f.inline && f.inline.value) lines.push(`   ${f.inline.label || 'Quantity'}: ${f.inline.value}`);
+    const notes = (f.notes || f.description || '').trim();
+    if(notes && notes !== (f.label || '').trim()) lines.push(`   ${notes}`);
+
+    if(kind === 'racking'){
+      const validParts = (f.parts || []).filter(p=>p.rackType && p.description && p.quantity);
+      validParts.forEach(p=>{
+        const desc = p.description.toLowerCase().includes('other / custom') && p.customDescription
+          ? p.customDescription.trim() : p.description;
+        lines.push(`   Parts: ${p.quantity} x ${p.rackType}: ${desc}`);
+      });
+    }
+    lines.push('');
+  });
+
+  if(kind === 'racking'){
+    const summary = buildPartsSummary(findings);
+    const partLines = [];
+    Object.entries(summary.byType || {}).forEach(([rackType, parts])=>{
+      parts.forEach(p=>partLines.push(`${p.qty} x ${rackType}: ${p.description}`));
+    });
+    if(partLines.length){
+      lines.push('TOTAL PARTS NEEDED');
+      partLines.forEach(x=>lines.push(x));
+      lines.push('');
+    }
+  }
+
+  return lines.join('\n').trim();
+}
+
+function updateWorkOrderText(){
+  const rack = document.getElementById('rackingWorkOrderText');
+  const carp = document.getElementById('carpentryWorkOrderText');
+  if(rack) rack.value = buildWorkOrderText('racking');
+  if(carp) carp.value = buildWorkOrderText('carpentry');
+}
+
+async function copyWorkOrder(kind){
+  const id = kind === 'racking' ? 'rackingWorkOrderText' : 'carpentryWorkOrderText';
+  const el = document.getElementById(id);
+  if(!el) return;
+  const text = el.value || buildWorkOrderText(kind);
+  try{
+    await navigator.clipboard.writeText(text);
+    toast(`${kind === 'racking' ? 'Racking' : 'Carpenter'} work order copied`,'ok');
+  }catch(err){
+    el.focus();
+    el.select();
+    el.setSelectionRange(0, el.value.length);
+    const ok = document.execCommand && document.execCommand('copy');
+    if(ok) toast(`${kind === 'racking' ? 'Racking' : 'Carpenter'} work order copied`,'ok');
+    else toast('Select the text and choose Copy','error');
+  }
 }
 
 // Collect "condition report" items — always shown in Complete Survey PDF regardless of status
