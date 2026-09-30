@@ -3895,11 +3895,26 @@ function buildWorkOrderText(kind){
   });
 
   if(kind === 'racking'){
-    const summary = buildPartsSummary(findings);
-    const partLines = [];
-    Object.entries(summary.byType || {}).forEach(([rackType, parts])=>{
-      parts.forEach(p=>partLines.push(`${p.qty} x ${rackType}: ${p.description}`));
+    // Consolidate identical parts across all racking findings.
+    // This is kept self-contained so the work-order box cannot fail
+    // if the PDF parts-summary helper changes elsewhere in the app.
+    const totals = new Map();
+    findings.forEach(f=>{
+      (f.parts || []).forEach(p=>{
+        const qty = Number(p.quantity) || 0;
+        if(!p.rackType || !p.description || qty <= 0) return;
+        const desc = p.description.toLowerCase().includes('other / custom') && p.customDescription
+          ? p.customDescription.trim() : p.description;
+        const key = `${p.rackType}|||${desc}`;
+        const existing = totals.get(key) || {rackType:p.rackType, description:desc, qty:0};
+        existing.qty += qty;
+        totals.set(key, existing);
+      });
     });
+
+    const partLines = Array.from(totals.values()).map(
+      p => `${p.qty} x ${p.rackType}: ${p.description}`
+    );
     if(partLines.length){
       lines.push('TOTAL PARTS NEEDED');
       partLines.forEach(x=>lines.push(x));
@@ -3921,7 +3936,8 @@ async function copyWorkOrder(kind){
   const id = kind === 'racking' ? 'rackingWorkOrderText' : 'carpentryWorkOrderText';
   const el = document.getElementById(id);
   if(!el) return;
-  const text = el.value || buildWorkOrderText(kind);
+  const text = buildWorkOrderText(kind);
+  el.value = text;
   try{
     await navigator.clipboard.writeText(text);
     toast(`${kind === 'racking' ? 'Racking' : 'Carpenter'} work order copied`,'ok');
