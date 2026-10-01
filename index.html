@@ -567,6 +567,18 @@ body.edit-mode .struct-reset-row{display:flex}
   .photo-mass-count{grid-column:1/-1;margin:0;text-align:center}
 }
 
+
+.global-photo-upload-zone{
+  min-height:76px;padding:12px;border:2px dashed #0e4a2a;border-radius:12px;
+  background:#fbfaf4;display:flex;gap:10px;align-items:center;position:relative
+}
+.global-photo-upload-zone.drag-over{background:#fff4a8;border-style:solid}
+.global-drop-note{font-size:12px;color:var(--muted);margin:-10px 0 16px}
+@media(max-width:600px){
+  .global-photo-upload-zone{display:grid;grid-template-columns:1fr 1fr}
+  .global-photo-upload-zone .photo-add{width:100%;justify-content:center}
+}
+
 </style>
 </head>
 <body>
@@ -701,6 +713,20 @@ body.edit-mode .struct-reset-row{display:flex}
     <button class="btn" type="button" onclick="deleteSelectedGlobalPhotos()" id="globalPhotoDeleteBtn" style="display:none;background:#a52323;color:#fff;border-color:#a52323"><i class="ti ti-trash"></i> Delete Selected</button>
     <span class="photo-mass-count" id="globalPhotoSelectedCount" style="display:none">0 selected</span>
   </div>
+
+  <div class="photo-add-group global-photo-upload-zone" id="globalPhotoUploadZone" style="margin:12px 0 18px">
+    <label class="photo-add">
+      <i class="ti ti-camera"></i> Camera
+      <input type="file" accept="image/*" capture="environment" multiple onchange="addRefPhoto('_global',this.files); this.value=''">
+    </label>
+    <label class="photo-add upload">
+      <i class="ti ti-upload"></i> Upload Photos
+      <input type="file" accept="image/*" multiple onchange="addRefPhoto('_global',this.files); this.value=''">
+    </label>
+    <div class="photo-drop-hint">Drop photos here</div>
+  </div>
+  <div class="global-drop-note"><i class="ti ti-drag-drop"></i> You can select multiple photos or drag and drop them into this area.</div>
+
   <div id="globalRefList"></div>
 </div>
 
@@ -3036,6 +3062,44 @@ function setupPhotoDragDrop(){
 }
 
 // Find the nearest .photo-add-group ancestor (the drop target zone)
+
+// Dedicated General Photos drag/drop handler.
+// Directly sends dropped File objects to addRefPhoto so it works even in browsers
+// that do not allow JavaScript to assign a DataTransfer to input.files.
+function setupGlobalPhotoDropZone(){
+  const zone = document.getElementById('globalPhotoUploadZone');
+  if(!zone || zone.dataset.dropReady === '1') return;
+  zone.dataset.dropReady = '1';
+
+  ['dragenter','dragover'].forEach(type=>{
+    zone.addEventListener(type, e=>{
+      e.preventDefault();
+      e.stopPropagation();
+      zone.classList.add('drag-over');
+    });
+  });
+
+  ['dragleave','dragend'].forEach(type=>{
+    zone.addEventListener(type, e=>{
+      e.preventDefault();
+      zone.classList.remove('drag-over');
+    });
+  });
+
+  zone.addEventListener('drop', async e=>{
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    zone.classList.remove('drag-over');
+    const files = Array.from(e.dataTransfer?.files || [])
+      .filter(f => !f.type || f.type.startsWith('image/'));
+    if(!files.length){
+      toast('Only image files can be added here','error');
+      return;
+    }
+    await addRefPhoto('_global', files);
+  }, true);
+}
+
 function findPhotoDropZone(target){
   let el = target;
   while(el && el !== document){
@@ -3589,9 +3653,7 @@ function renderGlobalRefPhotos(){
   if(!photos.length){
     el.innerHTML = `
       <div class="empty"><i class="ti ti-camera"></i>No reference photos yet<br><small style="display:block;margin-top:8px">Anything you want to look back at later — counters, lights, layouts, signs.</small></div>
-      <div style="margin-top:14px">
-        ${renderPhotoButtons("addRefPhoto('_global',this.files)")}
-      </div>`;
+      <div style="margin-top:10px;font-size:13px;color:var(--muted)">Use Camera, Upload Photos, or drag photos into the upload area above.</div>`;
     return;
   }
   el.innerHTML = `
@@ -3607,7 +3669,6 @@ function renderGlobalRefPhotos(){
           <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="setRefCaption('_global',${i},this.value)" style="width:140px">
         </div>
       `).join('')}
-      ${renderPhotoButtons("addRefPhoto('_global',this.files)")}
     </div>
   `;
   hydratePhotoPlaceholders(el);
@@ -5942,6 +6003,7 @@ window.addEventListener('DOMContentLoaded', async ()=>{
   });
   // Enable drag-and-drop photo uploads on every .photo-add-group zone
   setupPhotoDragDrop();
+  setupGlobalPhotoDropZone();
   // Update storage gauge periodically
   setInterval(updateStorageGauge, 30000);
 });
