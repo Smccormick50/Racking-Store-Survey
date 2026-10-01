@@ -552,6 +552,21 @@ body.edit-mode .struct-reset-row{display:flex}
 .work-order-text{width:100%;min-height:190px;box-sizing:border-box;border:1px solid #b8c6bd;border-radius:8px;padding:12px;font:13px/1.45 Arial,sans-serif;background:#f8faf8;color:#222;resize:vertical}
 .copy-work-order-btn{margin-top:8px;width:100%}
 
+
+/* ===== PHOTO MASS SELECT / DELETE ===== */
+.photo-mass-toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:12px 0 16px}
+.photo-mass-toolbar .btn{width:auto;min-height:42px;margin:0}
+.photo-mass-count{font-size:13px;font-weight:800;color:var(--green);margin-left:auto}
+.ref-thumb.photo-selectable{position:relative}
+.photo-select-box{position:absolute;top:7px;left:7px;z-index:12;width:25px;height:25px;accent-color:var(--green);cursor:pointer;filter:drop-shadow(0 1px 2px rgba(0,0,0,.35))}
+.ref-thumb.photo-selected .photo-thumb{outline:4px solid var(--yellow);outline-offset:2px}
+.ref-thumb.photo-selected{background:#fff8c9;border-radius:8px}
+@media(max-width:600px){
+  .photo-mass-toolbar{display:grid;grid-template-columns:1fr 1fr}
+  .photo-mass-toolbar .btn{width:100%}
+  .photo-mass-count{grid-column:1/-1;margin:0;text-align:center}
+}
+
 </style>
 </head>
 <body>
@@ -680,6 +695,12 @@ body.edit-mode .struct-reset-row{display:flex}
 <div class="page" id="page-refs">
   <h1><i class="ti ti-camera-plus" style="vertical-align:-3px"></i> Reference Photos <span id="globalRefCount" style="font-size:14px;background:var(--yellow);padding:3px 12px;border-radius:14px;color:var(--green);font-weight:800;vertical-align:middle;margin-left:4px">0</span></h1>
   <p class="page-subtitle">Anything you want to look back at later — counters, lights, signs, layouts, oddities. Not tied to any issue. You can also add reference photos per-section on the Walk page.</p>
+  <div class="photo-mass-toolbar" id="globalPhotoMassToolbar">
+    <button class="btn btn-secondary" type="button" onclick="toggleGlobalPhotoSelectMode()" id="globalPhotoSelectBtn"><i class="ti ti-checkbox"></i> Select Photos</button>
+    <button class="btn btn-secondary" type="button" onclick="selectAllGlobalPhotos()" id="globalPhotoSelectAllBtn" style="display:none"><i class="ti ti-checks"></i> Select All</button>
+    <button class="btn" type="button" onclick="deleteSelectedGlobalPhotos()" id="globalPhotoDeleteBtn" style="display:none;background:#a52323;color:#fff;border-color:#a52323"><i class="ti ti-trash"></i> Delete Selected</button>
+    <span class="photo-mass-count" id="globalPhotoSelectedCount" style="display:none">0 selected</span>
+  </div>
   <div id="globalRefList"></div>
 </div>
 
@@ -3481,11 +3502,90 @@ function renderRefStrip(sectionKey, photos, isStruct){
   `;
 }
 
+
+let globalPhotoSelectMode = false;
+let globalPhotoSelected = new Set();
+
+function toggleGlobalPhotoSelectMode(){
+  globalPhotoSelectMode = !globalPhotoSelectMode;
+  if(!globalPhotoSelectMode) globalPhotoSelected.clear();
+  renderGlobalRefPhotos();
+  updateGlobalPhotoMassToolbar();
+}
+
+function updateGlobalPhotoMassToolbar(){
+  const selectBtn = document.getElementById('globalPhotoSelectBtn');
+  const allBtn = document.getElementById('globalPhotoSelectAllBtn');
+  const deleteBtn = document.getElementById('globalPhotoDeleteBtn');
+  const count = document.getElementById('globalPhotoSelectedCount');
+  if(!selectBtn) return;
+
+  selectBtn.innerHTML = globalPhotoSelectMode
+    ? '<i class="ti ti-x"></i> Cancel Selection'
+    : '<i class="ti ti-checkbox"></i> Select Photos';
+
+  allBtn.style.display = globalPhotoSelectMode ? '' : 'none';
+  deleteBtn.style.display = globalPhotoSelectMode ? '' : 'none';
+  count.style.display = globalPhotoSelectMode ? '' : 'none';
+
+  const total = (state.refPhotos['_global'] || []).length;
+  count.textContent = `${globalPhotoSelected.size} selected`;
+  allBtn.innerHTML = globalPhotoSelected.size === total && total > 0
+    ? '<i class="ti ti-square"></i> Clear All'
+    : '<i class="ti ti-checks"></i> Select All';
+  deleteBtn.disabled = globalPhotoSelected.size === 0;
+  deleteBtn.style.opacity = globalPhotoSelected.size === 0 ? '.5' : '1';
+}
+
+function toggleGlobalPhotoSelection(idx, checked){
+  if(checked) globalPhotoSelected.add(idx);
+  else globalPhotoSelected.delete(idx);
+  const card = document.querySelector(`.global-photo-card[data-photo-index="${idx}"]`);
+  if(card) card.classList.toggle('photo-selected', checked);
+  updateGlobalPhotoMassToolbar();
+}
+
+function selectAllGlobalPhotos(){
+  const photos = state.refPhotos['_global'] || [];
+  if(globalPhotoSelected.size === photos.length && photos.length){
+    globalPhotoSelected.clear();
+  } else {
+    globalPhotoSelected = new Set(photos.map((_,i)=>i));
+  }
+  renderGlobalRefPhotos();
+  updateGlobalPhotoMassToolbar();
+}
+
+async function deleteSelectedGlobalPhotos(){
+  const photos = state.refPhotos['_global'] || [];
+  const indexes = Array.from(globalPhotoSelected).sort((a,b)=>b-a);
+  if(!indexes.length) return;
+  if(!confirm(`Delete ${indexes.length} selected photo${indexes.length===1?'':'s'}? This cannot be undone.`)) return;
+
+  for(const idx of indexes){
+    const photo = photos[idx];
+    if(photo && photo.id){
+      try { await deletePhotoBlob(photo.id); }
+      catch(e){ console.error('Could not delete photo blob', photo.id, e); }
+    }
+    photos.splice(idx,1);
+  }
+
+  globalPhotoSelected.clear();
+  globalPhotoSelectMode = false;
+  save();
+  renderGlobalRefPhotos();
+  updateGlobalPhotoMassToolbar();
+  toast(`${indexes.length} photo${indexes.length===1?'':'s'} deleted`, 'ok');
+}
+
+
 function renderGlobalRefPhotos(){
   const photos = state.refPhotos['_global'] || [];
   const el = document.getElementById('globalRefList');
   if(!el) return;
   document.getElementById('globalRefCount').textContent = photos.length;
+  setTimeout(updateGlobalPhotoMassToolbar,0);
   if(!photos.length){
     el.innerHTML = `
       <div class="empty"><i class="ti ti-camera"></i>No reference photos yet<br><small style="display:block;margin-top:8px">Anything you want to look back at later — counters, lights, layouts, signs.</small></div>
@@ -3497,10 +3597,12 @@ function renderGlobalRefPhotos(){
   el.innerHTML = `
     <div class="photo-row">
       ${photos.map((p,i)=>`
-        <div class="ref-thumb" style="width:140px">
+        <div class="ref-thumb global-photo-card photo-selectable ${globalPhotoSelected.has(i)?'photo-selected':''}" data-photo-index="${i}" style="width:140px">
           <div class="photo-thumb" style="width:140px;height:140px">
             ${photoImgTag(p)}
-            <button class="del" onclick="deleteRefPhoto('_global',${i})">×</button>
+            ${globalPhotoSelectMode
+              ? `<input class="photo-select-box" type="checkbox" ${globalPhotoSelected.has(i)?'checked':''} onclick="event.stopPropagation()" onchange="toggleGlobalPhotoSelection(${i},this.checked)">`
+              : `<button class="del" onclick="deleteRefPhoto('_global',${i})">×</button>`}
           </div>
           <input type="text" class="ref-caption" placeholder="caption..." value="${escapeHtml(p.caption||'')}" onchange="setRefCaption('_global',${i},this.value)" style="width:140px">
         </div>
