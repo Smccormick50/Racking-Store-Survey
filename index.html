@@ -712,6 +712,7 @@ body.edit-mode .struct-reset-row{display:flex}
     <button class="btn btn-secondary" type="button" onclick="selectAllGlobalPhotos()" id="globalPhotoSelectAllBtn" style="display:none"><i class="ti ti-checks"></i> Select All</button>
     <button class="btn" type="button" onclick="deleteSelectedGlobalPhotos()" id="globalPhotoDeleteBtn" style="display:none;background:#a52323;color:#fff;border-color:#a52323"><i class="ti ti-trash"></i> Delete Selected</button>
     <span class="photo-mass-count" id="globalPhotoSelectedCount" style="display:none">0 selected</span>
+    <button class="btn btn-secondary" type="button" onclick="downloadPhotoZip()" style="margin-left:auto"><i class="ti ti-download"></i> Download All Photos</button>
   </div>
 
   <div class="photo-add-group global-photo-upload-zone" id="globalPhotoUploadZone" style="margin:12px 0 18px">
@@ -3034,39 +3035,43 @@ function renderPhotoButtons(handler){
 }
 
 // ============= DRAG-AND-DROP PHOTO UPLOADS =============
-// Works at document level via event delegation. Any .photo-add-group or .photo-row accepts
-// dropped image files. The drop dispatches to the existing onchange handler of that zone's
-// upload input, so all existing photo handling (resize, save, in-place render) works unchanged.
+// ===== DRAG-AND-DROP PHOTO UPLOAD =====
+// Document-level event delegation. Any .photo-add-group zone accepts dropped image files.
+// Uses a WeakMap of per-zone counters to track nested dragenter/leave events correctly —
+// avoids the single-counter flicker bug where moving over a child element clears the indicator.
 
-let _dndDragCounter = 0; // tracks nested dragenter/leave so leaving a child doesn't kill the indicator
+const _dndCounters = new WeakMap(); // zone element → enter count
+
+function _dndCounterFor(zone){
+  if(!_dndCounters.has(zone)) _dndCounters.set(zone, 0);
+  return _dndCounters.get(zone);
+}
 
 function setupPhotoDragDrop(){
   if(window._photoDndInstalled) return;
   window._photoDndInstalled = true;
 
-  // Prevent the browser from navigating to the file if it's dropped outside any zone
+  // Prevent browser from opening file if dropped outside a zone
   document.addEventListener('dragover', e => { e.preventDefault(); });
   document.addEventListener('drop', e => {
-    // Only handle if NOT on a known photo zone — block default to avoid opening the file
-    const zone = findPhotoDropZone(e.target);
-    if(!zone) { e.preventDefault(); }
+    if(!findPhotoDropZone(e.target)) e.preventDefault();
   });
 
   document.addEventListener('dragenter', e => {
     const zone = findPhotoDropZone(e.target);
     if(!zone) return;
     e.preventDefault();
-    _dndDragCounter++;
+    const n = (_dndCounters.get(zone) || 0) + 1;
+    _dndCounters.set(zone, n);
     zone.classList.add('drag-over');
   });
 
   document.addEventListener('dragleave', e => {
     const zone = findPhotoDropZone(e.target);
     if(!zone) return;
-    _dndDragCounter = Math.max(0, _dndDragCounter - 1);
-    if(_dndDragCounter === 0){
-      document.querySelectorAll('.photo-add-group.drag-over').forEach(el => el.classList.remove('drag-over'));
-    }
+    const n = Math.max(0, (_dndCounters.get(zone) || 1) - 1);
+    _dndCounters.set(zone, n);
+    if(n === 0) zone.classList.remove('drag-over');
   });
 
   document.addEventListener('drop', e => {
@@ -3074,29 +3079,31 @@ function setupPhotoDragDrop(){
     if(!zone) return;
     e.preventDefault();
     e.stopPropagation();
-    _dndDragCounter = 0;
-    document.querySelectorAll('.photo-add-group.drag-over').forEach(el => el.classList.remove('drag-over'));
+    _dndCounters.set(zone, 0);
+    zone.classList.remove('drag-over');
 
     const files = e.dataTransfer && e.dataTransfer.files;
     if(!files || !files.length) return;
-    // Filter to images only
     const imageFiles = Array.from(files).filter(f => f.type && f.type.startsWith('image/'));
     if(!imageFiles.length){ toast('Only image files can be dropped','error'); return; }
 
-    // Find the upload-type file input within the zone and dispatch
+    // Global photo upload zone — call addRefPhoto directly (most reliable path)
+    if(zone.id === 'globalPhotoUploadZone'){
+      addRefPhoto('_global', imageFiles);
+      return;
+    }
+
+    // All other zones: dispatch via the upload input's onchange handler
     const uploadInput = zone.querySelector('label.photo-add.upload input[type="file"]');
     if(!uploadInput) return;
 
-    // Build a DataTransfer to assign to .files (so the existing onchange handler can read this.files)
     try {
       const dt = new DataTransfer();
       imageFiles.forEach(f => dt.items.add(f));
       uploadInput.files = dt.files;
-      // Fire change event which triggers the inline onchange handler
       uploadInput.dispatchEvent(new Event('change', { bubbles: true }));
     } catch(err){
-      // DataTransfer.items.add not supported in some old browsers — fall back to direct handler invocation
-      // Parse the onchange attribute (a string like "addPhoto('id_x',this.files)") and exec with files
+      // DataTransfer.items.add fallback for older browsers
       const handlerAttr = uploadInput.getAttribute('onchange');
       if(handlerAttr){
         try {
@@ -3104,51 +3111,16 @@ function setupPhotoDragDrop(){
           fn(imageFiles);
         } catch(execErr){
           console.error('DnD fallback failed', execErr);
-          toast('Drag-drop not supported, use Upload button','error');
+          toast('Drag-drop not supported here, use Upload button','error');
         }
       }
     }
   });
 }
 
-// Find the nearest .photo-add-group ancestor (the drop target zone)
-
-// Dedicated General Photos drag/drop handler.
-// Directly sends dropped File objects to addRefPhoto so it works even in browsers
-// that do not allow JavaScript to assign a DataTransfer to input.files.
-function setupGlobalPhotoDropZone(){
-  const zone = document.getElementById('globalPhotoUploadZone');
-  if(!zone || zone.dataset.dropReady === '1') return;
-  zone.dataset.dropReady = '1';
-
-  ['dragenter','dragover'].forEach(type=>{
-    zone.addEventListener(type, e=>{
-      e.preventDefault();
-      e.stopPropagation();
-      zone.classList.add('drag-over');
-    });
-  });
-
-  ['dragleave','dragend'].forEach(type=>{
-    zone.addEventListener(type, e=>{
-      e.preventDefault();
-      zone.classList.remove('drag-over');
-    });
-  });
-
-  zone.addEventListener('drop', async e=>{
-    e.preventDefault();
-    e.stopImmediatePropagation();
-    zone.classList.remove('drag-over');
-    const files = Array.from(e.dataTransfer?.files || [])
-      .filter(f => !f.type || f.type.startsWith('image/'));
-    if(!files.length){
-      toast('Only image files can be added here','error');
-      return;
-    }
-    await addRefPhoto('_global', files);
-  }, true);
-}
+// No longer needs a separate handler — document-level handler above routes
+// globalPhotoUploadZone drops directly to addRefPhoto.
+function setupGlobalPhotoDropZone(){ /* handled by setupPhotoDragDrop */ }
 
 function findPhotoDropZone(target){
   let el = target;
