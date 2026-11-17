@@ -1304,6 +1304,30 @@ function resetTemplateEdits(){
   toast('Template reset to defaults','ok');
 }
 
+// ===== PHOTO BLOB CLEANUP HELPERS =====
+// When items/sections/structures are deleted, their photo blobs must be explicitly
+// deleted from IndexedDB (they are NOT automatically garbage-collected).
+async function deletePhotosForChecklistData(data){
+  if(!data || !Array.isArray(data.photos)) return;
+  for(const p of data.photos){
+    if(p && p.id){ try { await deletePhotoBlob(p.id); } catch(e){} }
+  }
+}
+async function deletePhotosForChecklistMap(checklistMap, itemIds){
+  if(!checklistMap) return;
+  const ids = itemIds || Object.keys(checklistMap);
+  for(const id of ids){ await deletePhotosForChecklistData(checklistMap[id]); }
+}
+async function deletePhotosForStructure(s){
+  if(!s) return;
+  await deletePhotosForChecklistMap(s.checklist);
+  if(Array.isArray(s.refPhotos)){
+    for(const p of s.refPhotos){
+      if(p && p.id){ try { await deletePhotoBlob(p.id); } catch(e){} }
+    }
+  }
+}
+
 // Mark an item id as racking — adds to RACKING_IDS (in-memory) AND persists it to
 // state.customRackingIds so it survives save/reload and gets re-applied by migrate().
 function markItemAsRacking(itemId){
@@ -1346,13 +1370,15 @@ function renameItem(sectionName, itemId, newLabel){
 }
 
 // Remove an item
-function removeItem(sectionName, itemId, itemLabel){
+async function removeItem(sectionName, itemId, itemLabel){
   if(!confirm(`Remove "${itemLabel}" from ${sectionName}?\n\nAny status, notes, or photos on this item will also be deleted.`)) return;
   const cl = ensureChecklistOverride();
   const sec = cl[sectionName];
   if(!sec) return;
   sec.items = sec.items.filter(it=>it.id!==itemId);
-  // Also clean up any data tied to this item
+  // Delete photo blobs before removing the data reference
+  await deletePhotosForChecklistData(state.checklist[itemId]);
+  unmarkItemAsRacking(itemId);
   delete state.checklist[itemId];
   save();
   renderWalk();
@@ -1392,7 +1418,7 @@ function renameStructItem(structId, itemId, newLabel){
   if(item){ item.label = newLabel; save(); }
 }
 
-function removeStructItem(structId, itemId, itemLabel){
+async function removeStructItem(structId, itemId, itemLabel){
   const s = state.structures.find(x=>x.id===structId);
   if(!s) return;
   if(!confirm(`Remove "${itemLabel}" from ${s.name}?\n\nAny status, notes, or photos on this item will also be deleted.\n\n(Other ${s.type} structures still keep this item.)`)) return;
@@ -1400,25 +1426,30 @@ function removeStructItem(structId, itemId, itemLabel){
   const idx = items.findIndex(it=>it.id===itemId);
   if(idx < 0) return;
   items.splice(idx, 1);
-  // Also clean up any data tied to this item on this structure
-  if(s.checklist) delete s.checklist[itemId];
+  // Delete photo blobs before removing the data reference
+  if(s.checklist){ await deletePhotosForChecklistData(s.checklist[itemId]); delete s.checklist[itemId]; }
+  unmarkItemAsRacking(itemId);
   save();
   renderStructures();
   toast('Item removed from '+s.name,'ok');
 }
 
-function resetStructItems(structId){
+async function resetStructItems(structId){
   const s = state.structures.find(x=>x.id===structId);
   if(!s) return;
   if(!confirm(`Reset ${s.name}'s items back to the default ${s.type} template?\n\nCustom items you added will be removed. Status/notes/photos on items that exist in the default template will be kept.`)) return;
   // Get the template items
   const templateItems = currentStructureTypes()[s.type] || [];
   const templateIds = new Set(templateItems.map(it=>it.id));
-  // Clean up checklist data for items that won't exist after reset
+  // Delete photo blobs and clean up checklist data for items that won't exist after reset
   if(s.checklist){
-    Object.keys(s.checklist).forEach(itemId => {
-      if(!templateIds.has(itemId)) delete s.checklist[itemId];
-    });
+    for(const itemId of Object.keys(s.checklist)){
+      if(!templateIds.has(itemId)){
+        await deletePhotosForChecklistData(s.checklist[itemId]);
+        unmarkItemAsRacking(itemId);
+        delete s.checklist[itemId];
+      }
+    }
   }
   delete s.itemsOverride;
   save();
@@ -1444,13 +1475,17 @@ function renameSection(oldName, newName){
 }
 
 // Remove a section
-function removeSection(sectionName){
+async function removeSection(sectionName){
   if(!confirm(`Remove section "${sectionName}" entirely from this survey?\n\nAll items in this section and their data will be deleted.`)) return;
   const cl = ensureChecklistOverride();
   const sec = cl[sectionName];
   if(!sec) return;
-  // Clean checklist data for all items in this section
-  sec.items.forEach(it => { delete state.checklist[it.id]; });
+  // Delete photo blobs and clean up checklist data for all items in this section
+  for(const it of sec.items){
+    await deletePhotosForChecklistData(state.checklist[it.id]);
+    unmarkItemAsRacking(it.id);
+    delete state.checklist[it.id];
+  }
   delete cl[sectionName];
   save();
   renderWalk();
@@ -1528,8 +1563,8 @@ function renderPartsCatalogEditor(){
         </div>
         ${(partList||[]).map((p,i)=>`
           <div class="catalog-item">
-            <input type="text" value="${escapeHtml(p)}" onchange="updatePart('${cssEscape(rackType)}',${i},this.value)">
-            <button class="edit-btn del" onclick="removePart('${cssEscape(rackType)}',${i})"><i class="ti ti-trash"></i></button>
+            <input type="text" value="${escapeHtml(p)}" onchange="updateCatalogPart('${cssEscape(rackType)}',${i},this.value)">
+            <button class="edit-btn del" onclick="removeCatalogPart('${cssEscape(rackType)}',${i})"><i class="ti ti-trash"></i></button>
           </div>
         `).join('')}
         <div class="catalog-add-row">
@@ -1571,7 +1606,7 @@ function removePartCategory(rackType){
   save();
   renderPartsCatalogEditor();
 }
-function updatePart(rackType, idx, newValue){
+function updateCatalogPart(rackType, idx, newValue){
   newValue = (newValue||'').trim();
   const parts = ensurePartsOverride();
   if(!parts[rackType]) return;
@@ -1582,7 +1617,7 @@ function updatePart(rackType, idx, newValue){
   }
   save();
 }
-function removePart(rackType, idx){
+function removeCatalogPart(rackType, idx){
   const parts = ensurePartsOverride();
   if(!parts[rackType]) return;
   parts[rackType].splice(idx,1);
@@ -2452,12 +2487,27 @@ async function nukeAllStorage(){
     masterTemplate = null;
     // Also remove any legacy localStorage keys
     try { localStorage.removeItem(SAVE_KEY); localStorage.removeItem(HIST_KEY); } catch(e){}
+    // Clear browser Cache Storage (CDN assets — counted by navigator.storage.estimate)
+    try {
+      if(window.caches && caches.keys){
+        const cacheNames = await caches.keys();
+        for(const name of cacheNames){ try { await caches.delete(name); } catch(e){} }
+      }
+    } catch(e){ console.warn('cache storage clear failed', e); }
+    // Unregister any service workers registered for this origin
+    try {
+      if(navigator.serviceWorker && navigator.serviceWorker.getRegistrations){
+        const regs = await navigator.serviceWorker.getRegistrations();
+        for(const reg of regs){ try { await reg.unregister(); } catch(e){} }
+      }
+    } catch(e){ console.warn('service worker unregister failed', e); }
     state = newState();
     syncFormFromState();
     renderStorefront();
     renderWalk();
     closeStorageManager();
-    updateStorageGauge();
+    await updateStorageGauge();
+    setTimeout(updateStorageGauge, 1200);
     toast('All data erased — starting fresh','ok');
   } catch(e){
     toast('Erase failed: ' + (e.message||'unknown'),'error');
@@ -3728,9 +3778,11 @@ function structIcon(type){
   return map[type] || "ti-building";
 }
 
-function deleteStructure(id){
+async function deleteStructure(id){
   if(!confirm('Delete this structure and all its findings?')) return;
-  state.structures = state.structures.filter(s=>s.id!==id);
+  const s = state.structures.find(x=>x.id===id);
+  if(s) await deletePhotosForStructure(s);
+  state.structures = state.structures.filter(x=>x.id!==id);
   save();
   renderStructures();
 }
